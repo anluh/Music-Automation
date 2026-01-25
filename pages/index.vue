@@ -7,9 +7,16 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import StyleTagsModal from '@/components/StyleTagsModal.vue'
 
 const mood = ref('')
-const stylePrompt = ref('')
+// const stylePrompt = ref('') // Deprecated in favor of tags
+const styleTags = ref<{ id: string, text: string, active: boolean }[]>([])
+const showStyleModal = ref(false)
+
+const activeStylePrompt = computed(() => {
+    return styleTags.value.filter(t => t.active).map(t => t.text).join(', ')
+})
 
 // Slider arrays
 const weirdnessRange = ref([40, 60])
@@ -17,6 +24,7 @@ const styleRange = ref([40, 60])
 const bpmRange = ref([100, 130])
 
 const songCount = ref(1) // Default 1 pair (2 songs)
+const playlistSize = ref(20) // Default 20
 const outputFolder = ref('C:\\MusicOutput')
 const autoDownload = ref(false)
 
@@ -29,10 +37,12 @@ let pollInterval: NodeJS.Timeout
 let autoProcessInterval: NodeJS.Timeout
 
 const isLoading = ref(false)
+const isInteracting = ref(false) // Pause polling during user actions
 const processingRowIds = ref<Set<number>>(new Set()) // Track multiple active IDs
 
 // Modal State
-const activeModalType = ref<'prompt' | 'lyrics' | null>(null)
+const activeModalType = ref<'prompt' | 'lyrics' | 'delete' | null>(null)
+const deletingId = ref<number | null>(null)
 const activeModalContent = ref('')
 
 const openModal = (type: 'prompt' | 'lyrics', content: string) => {
@@ -43,6 +53,12 @@ const openModal = (type: 'prompt' | 'lyrics', content: string) => {
 const closeModal = () => {
     activeModalType.value = null
     activeModalContent.value = ''
+    deletingId.value = null
+}
+
+const openStyleTagsModal = () => {
+    console.log('Opening Style Tags Modal...')
+    showStyleModal.value = true
 }
 
 // Load Settings & Start Polling
@@ -51,11 +67,23 @@ onMounted(async () => {
         const settings = await $fetch('/api/settings') as any
         const d = settings.data || {}
 
-        if (d.stylePrompt) stylePrompt.value = d.stylePrompt
+        // if (d.stylePrompt) stylePrompt.value = d.stylePrompt // Legacy
+        
+        if (d.styleTags) {
+             try {
+                 styleTags.value = JSON.parse(d.styleTags)
+             } catch (e) { console.error('Error parsing styleTags', e) }
+        } else if (d.stylePrompt) {
+             // Migration from legacy string
+             const legacy = d.stylePrompt.split(',').map((s: string) => s.trim()).filter((s: string) => s)
+             styleTags.value = legacy.map((text: string) => ({ id: Date.now().toString() + Math.random(), text, active: true }))
+        }
+
         if (d.weirdnessRange) weirdnessRange.value = JSON.parse(d.weirdnessRange)
         if (d.styleRange) styleRange.value = JSON.parse(d.styleRange)
         if (d.bpmRange) bpmRange.value = JSON.parse(d.bpmRange)
         if (d.songCount) songCount.value = parseInt(d.songCount)
+        if (d.playlistSize) playlistSize.value = parseInt(d.playlistSize)
         if (d.outputFolder) outputFolder.value = d.outputFolder
         if (d.autoDownload) autoDownload.value = d.autoDownload === 'true'
 
@@ -68,7 +96,9 @@ onMounted(async () => {
 
   // 1. General Data Refresh (UI sync)
   pollInterval = setInterval(() => {
-    refresh()
+    if (!isInteracting.value) {
+        refresh()
+    }
   }, 3000)
 
   // 2. Automation Loop (Async Batch Processing)
@@ -116,15 +146,22 @@ const toggleAutoProcess = () => {
   autoProcess.value = !autoProcess.value
 }
 
+// Auto-save tags on any change
+watch([styleTags, outputFolder, playlistSize, songCount, autoDownload], () => {
+    saveSettings()
+}, { deep: true })
+
 const saveSettings = async () => {
     const settingsToSave = {
-        stylePrompt: stylePrompt.value,
+        stylePrompt: activeStylePrompt.value, // Save string for legacy/backend compatibility
+        styleTags: JSON.stringify(styleTags.value),
         weirdnessRange: JSON.stringify(weirdnessRange.value),
         styleRange: JSON.stringify(styleRange.value),
         bpmRange: JSON.stringify(bpmRange.value),
         songCount: songCount.value.toString(),
         outputFolder: outputFolder.value,
-        autoDownload: autoDownload.value.toString()
+        autoDownload: autoDownload.value.toString(),
+        playlistSize: playlistSize.value.toString()
     }
 
     try {
@@ -144,7 +181,8 @@ const startAutomation = async () => {
       method: 'POST',
       body: { 
         mood: mood.value, 
-        stylePrompt: stylePrompt.value,
+        stylePrompt: activeStylePrompt.value,
+        tags: styleTags.value.filter(t => t.active).map(t => t.text),
         weirdnessMin: weirdnessRange.value[0],
         weirdnessMax: weirdnessRange.value[1],
         bpmMin: bpmRange.value[0],
@@ -180,6 +218,29 @@ const processRow = async (id: number) => {
   }
 }
 
+const downloadTrack = async (url: string, name: string, targetFolder: string, avoidFolders: string[] = []) => {
+    try {
+        console.log(`[Download] Saving ${name} to ${targetFolder}...`)
+        const res = await $fetch('/api/download_to_disk', {
+            method: 'POST',
+            body: { 
+                url, 
+                filename: name, 
+                outputFolder: targetFolder,
+                avoidFolders
+            }
+        }) as any
+        
+        console.log(`[Download] Success: ${name}`)
+        if (res.path) console.log(`[Discovery] File Saved At: ${res.path}`)
+        
+        return { success: true, folderUsed: res.folderUsed }
+    } catch (e: any) {
+        console.error(`[Download] Failed ${name}`, e)
+        throw e
+    }
+}
+
 const handleDownload = async (gen: any) => {
     if (autoDownload.value) {
         manualUpdateStatus(gen.id, 'DOWNLOADING')
@@ -187,71 +248,175 @@ const handleDownload = async (gen: any) => {
     }
 
     const outputTarget = outputFolder.value || 'C:\\MusicOutput'
-    
-    const saveToDisk = async (url: string, name: string) => {
-        try {
-            console.log(`Saving ${name} to ${outputTarget}...`)
-            await $fetch('/api/download_to_disk', {
-                method: 'POST',
-                body: { 
-                    url, 
-                    filename: name, 
-                    outputFolder: outputTarget 
-                }
-            })
-            alert(`Saved: ${name}\nLocation: ${outputTarget}`)
-        } catch (e: any) {
-            console.error('Save failed', e)
-            alert(`Failed to save ${name}: ${e.message}`)
-        }
-    }
 
-    if (gen.audio_url_1) {
-        saveToDisk(gen.audio_url_1, gen.song_name_1 || 'track1')
-    }
-    if (gen.audio_url_2) {
-         setTimeout(() => {
-             saveToDisk(gen.audio_url_2, gen.song_name_2 || 'track2')
-         }, 1000)
+    try {
+        // 1. UI: Show Spinner
+        processingRowIds.value.add(gen.id)
+        
+        // 2. DB: Set status to DOWNLOADING
+        await $fetch('/api/automation/update_status', {
+            method: 'POST',
+            body: { id: gen.id, status: 'DOWNLOADING' }
+        })
+        gen.status = 'DOWNLOADING' // Optimistic
+
+        // 3. Perform Downloads Sequentially
+        let usedFolder1 = ''
+
+        if (gen.audio_url_1) {
+            const res = await downloadTrack(gen.audio_url_1, gen.song_name_1 || 'track1', outputTarget)
+            usedFolder1 = res.folderUsed || ''
+        }
+        
+        if (gen.audio_url_2) {
+             await new Promise(resolve => setTimeout(resolve, 1000))
+             
+             // Logic: If song 1 went to playlist-N, song 2 must avoid N and N+1.
+             // We can pass exact paths if we have them, or just let server handle it if we pass "playlist-1"
+             const avoid = []
+             if (usedFolder1) {
+                 avoid.push(usedFolder1)
+                 // Try to guess the next one
+                 const match = usedFolder1.match(/playlist-(\d+)$/)
+                 if (match) {
+                     const idx = parseInt(match[1])
+                     // Construct next folder path strictly
+                     // Assuming usedFolder1 is full path, we replace the number
+                     const nextFolder = usedFolder1.replace(`playlist-${idx}`, `playlist-${idx + 1}`)
+                     avoid.push(nextFolder)
+                 }
+             }
+             
+             await downloadTrack(gen.audio_url_2, gen.song_name_2 || 'track2', outputTarget, avoid)
+        }
+
+        // 4. Success: Set status to COMPLETED
+        await $fetch('/api/automation/update_status', {
+            method: 'POST',
+            body: { id: gen.id, status: 'COMPLETED' }
+        })
+        gen.status = 'COMPLETED'
+        refresh() 
+
+    } catch (e: any) {
+        console.error('Manual download sequence failed', e)
+        alert(`Download failed: ${e.message}`)
+    } finally {
+        processingRowIds.value.delete(gen.id)
     }
 }
 
 const downloadAll = async () => {
-    if (!generations.value) return
-    if (confirm('Download all available tracks? This will trigger multiple downloads.')) {
-        const forceDownload = (url: string, name: string) => {
-             const finalUrl = `/api/download?url=${encodeURIComponent(url)}&filename=${encodeURIComponent(name)}&t=${Date.now()}`
-             const a = document.createElement('a')
-             a.href = finalUrl
-             a.download = name + '.mp3'
-             document.body.appendChild(a)
-             a.click()
-             document.body.removeChild(a)
-        }
+    console.log('[DownloadAll] Triggered')
+    if (!generations.value || generations.value.length === 0) return
 
-        for (const gen of generations.value as any[]) {
-             if (gen.audio_url_1) {
-                 forceDownload(gen.audio_url_1, gen.song_name_1 || 'track1')
-                 await new Promise(resolve => setTimeout(resolve, 500))
-             }
-             if (gen.audio_url_2) {
-                 forceDownload(gen.audio_url_2, gen.song_name_2 || 'track2')
-                 await new Promise(resolve => setTimeout(resolve, 500))
-             }
+    const outputTarget = outputFolder.value || 'C:\\MusicOutput'
+    
+    // Count pending
+    const items = generations.value as any[]
+    const pendingItems = items.filter(g => g.status !== 'COMPLETED' && (g.audio_url_1 || g.audio_url_2))
+    
+    const mode = pendingItems.length > 0 ? 'PENDING' : 'ALL'
+    const targets = mode === 'PENDING' ? pendingItems : items
+    
+    // Auto-proceed without native confirm to avoid browser blocking issues
+    // Just inform via console/UI what is happening
+    const msg = mode === 'PENDING' 
+        ? `Downloading ${pendingItems.length} new tracks to ${outputTarget}...` 
+        : `Redownloading all ${items.length} tracks to ${outputTarget}...`
+    
+    console.log(`[UI] ${msg}`)
+    // alert(msg) // Optional: could re-enable if user wants feedback, but native dialogs are flaky here.
+
+    let successCount = 0
+    let failCount = 0
+    let lastError = ''
+
+    for (const gen of targets) {
+        if (!gen.audio_url_1 && !gen.audio_url_2) continue
+
+        try {
+            if (gen.status !== 'COMPLETED' || mode === 'ALL') {
+                gen.status = 'DOWNLOADING'
+            }
+
+            let usedFolder1 = ''
+
+            if (gen.audio_url_1) {
+                const res = await downloadTrack(gen.audio_url_1, gen.song_name_1 || 'track1', outputTarget)
+                successCount++
+                usedFolder1 = res.folderUsed || ''
+                await new Promise(resolve => setTimeout(resolve, 500))
+            }
+            
+            if (gen.audio_url_2) {
+                const avoid = []
+                if (usedFolder1) {
+                     avoid.push(usedFolder1)
+                     const match = usedFolder1.match(/playlist-(\d+)$/)
+                     if (match) {
+                         const idx = parseInt(match[1])
+                         const nextFolder = usedFolder1.replace(`playlist-${idx}`, `playlist-${idx + 1}`)
+                         avoid.push(nextFolder)
+                     }
+                }
+
+                await downloadTrack(gen.audio_url_2, gen.song_name_2 || 'track2', outputTarget, avoid)
+                successCount++
+                await new Promise(resolve => setTimeout(resolve, 500))
+            }
+
+            await $fetch('/api/automation/update_status', {
+                method: 'POST',
+                body: { id: gen.id, status: 'COMPLETED' }
+            })
+            gen.status = 'COMPLETED'
+
+        } catch (e: any) {
+            failCount++
+            lastError = e.message
+            console.error(`Failed gen #${gen.id}`, e)
         }
+    }
+
+    if (failCount > 0) {
+        alert(`Finished with errors.\nSuccess: ${successCount}\nFailed: ${failCount}\nLast Error: ${lastError}`)
+    } else {
+        // Success alert is fine at the end
+        // alert(`Download Complete!`) 
     }
 }
 
-const deleteRow = async (id: number) => {
-    if(!confirm('Delete this generation task?')) return
+
+const deleteRow = (id: number) => {
+    deletingId.value = id
+    activeModalType.value = 'delete'
+}
+
+const confirmDelete = async () => {
+    if (!deletingId.value) return
+    const id = deletingId.value
+    closeModal()
+    
+    isInteracting.value = true // Stop polling
+
+    // Optimistic Update
+    if (generations.value) {
+        generations.value = generations.value.filter((g: any) => g.id !== id)
+    }
+
     try {
         await $fetch('/api/automation/delete', {
             method: 'POST',
             body: { id }
         })
-        refresh()
+        console.log('[UI] Delete synced')
+        await refresh() // Force one clean refresh
     } catch(e) {
         console.error(e)
+        refresh() // Revert on failure
+    } finally {
+        isInteracting.value = false // Resume polling
     }
 }
 
@@ -304,7 +469,7 @@ onUnmounted(() => {
                 :class="autoProcess ? 'bg-gradient-to-r from-emerald-500 to-teal-600 hover:from-emerald-400 hover:to-teal-500 text-white shadow-lg shadow-emerald-500/20 border-0' : ''" 
                 variant="outline"
                 @click="toggleAutoProcess">
-                 {{ autoProcess ? 'Auto-Run Active' : 'Enable Auto-Run' }}
+                 {{ autoProcess ? 'Auto-Run Active' : 'Start Auto-Run' }}
              </Button>
         </div>
     </header>
@@ -313,15 +478,9 @@ onUnmounted(() => {
     <section>
         <Card class="border-white/5 bg-black/20 backdrop-blur-xl shadow-2xl shadow-black/40 overflow-hidden">
             <div class="absolute top-0 left-0 w-full h-1 bg-gradient-to-r from-indigo-500 via-purple-500 to-pink-500"></div>
-            <CardHeader>
-                <CardTitle class="text-xl flex items-center gap-2">
-                    <span class="text-primary">✨</span> New Generation
-                </CardTitle>
-                <CardDescription>Configure your track parameters below.</CardDescription>
-            </CardHeader>
             <CardContent class="space-y-6">
                 <!-- Row 1: Main Inputs -->
-                <div class="grid grid-cols-1 md:grid-cols-12 gap-6">
+                <div class="grid grid-cols-1 md:grid-cols-12 gap-6 mt-5">
                     <div class="md:col-span-8 space-y-2">
                         <Label class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Mood / Prompt</Label>
                         <div class="relative">
@@ -330,8 +489,23 @@ onUnmounted(() => {
                         </div>
                     </div>
                     <div class="md:col-span-4 space-y-2">
-                        <Label class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Style Tag</Label>
-                        <Input v-model="stylePrompt" placeholder="e.g. 'Techno'" class="h-12 bg-background/50 border-white/10" />
+                        <Label class="text-xs font-semibold uppercase tracking-wider text-muted-foreground flex justify-between items-center">
+                            Style Tags
+                        </Label>
+                        <div @click="openStyleTagsModal" 
+                             class="h-12 bg-background/50 border border-white/10 rounded-md p-2 flex items-center justify-center gap-2 overflow-hidden cursor-pointer hover:border-indigo-500/50 transition-all shadow-inner relative group text-sm font-mono text-muted-foreground hover:text-foreground">
+                             
+                             <span v-if="styleTags.filter(t => t.active).length > 0">
+                                 {{ styleTags.filter(t => t.active).length }} Active Style{{ styleTags.filter(t => t.active).length === 1 ? '' : 's' }}
+                             </span>
+                             <span v-else class="italic opacity-50">
+                                 No active styles...
+                             </span>
+                             
+                             <div class="absolute right-2 top-1/2 -translate-y-1/2 bg-background/80 p-1 rounded-full opacity-50 group-hover:opacity-100 transition-opacity">
+                                <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
+                             </div>
+                        </div>
                     </div>
                 </div>
 
@@ -366,7 +540,11 @@ onUnmounted(() => {
                          <Label class="text-xs">Batch Count</Label>
                          <Input type="number" min="1" max="50" v-model.number="songCount" class="bg-background/50 border-white/10" />
                     </div>
-                    <div class="md:col-span-7 space-y-2">
+                     <div class="md:col-span-2 space-y-2">
+                         <Label class="text-xs">Playlist Folder Limit</Label>
+                         <Input type="number" min="1" max="100" v-model.number="playlistSize" class="bg-background/50 border-white/10" placeholder="20" />
+                    </div>
+                    <div class="md:col-span-5 space-y-2">
                          <Label class="text-xs">Output Folder</Label>
                          <Input v-model="outputFolder" class="bg-background/50 border-white/10 font-mono text-xs" />
                     </div>
@@ -379,7 +557,7 @@ onUnmounted(() => {
             <CardFooter class="bg-black/20 py-4 flex justify-end border-t border-white/5">
                 <Button size="lg" @click="startAutomation" :disabled="isLoading || !mood" 
                         class="w-full md:w-auto bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-500 hover:to-purple-500 border-0 shadow-lg shadow-indigo-500/20 text-white font-semibold tracking-wide">
-                    {{ isLoading ? 'Initializing...' : 'Generate Tracks' }}
+                    {{ isLoading ? 'Initializing...' : 'Add to Playlist' }}
                 </Button>
             </CardFooter>
         </Card>
@@ -404,20 +582,20 @@ onUnmounted(() => {
                                     : 'hover:border-indigo-500/30 hover:shadow-lg hover:shadow-indigo-500/10'
                           ]">
                         
-                        <!-- Animated Shimmer Border for Pending Music -->
-                        <div v-if="gen.status === 'PENDING_MUSIC'" class="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-xl">
+                        <!-- Animated Shimmer for Music (Only if Active) -->
+                        <div v-if="gen.status === 'PENDING_MUSIC' && (gen.suno_task_id || processingRowIds.has(gen.id))" class="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-xl">
                             <div class="absolute top-0 left-0 w-[200%] h-full bg-gradient-to-r from-transparent via-indigo-500/10 to-transparent animate-shimmer"></div>
                         </div>
-                        <!-- Animated Shimmer for Gemini -->
-                        <div v-if="gen.status === 'PENDING_GEMINI' || gen.status === 'PENDING_LYRICS'" class="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-xl">
+                        <!-- Animated Shimmer for Gemini (Only if Active) -->
+                        <div v-if="(gen.status === 'PENDING_GEMINI' || gen.status === 'PENDING_LYRICS') && (autoProcess || processingRowIds.has(gen.id))" class="absolute inset-0 z-0 pointer-events-none overflow-hidden rounded-xl">
                             <div class="absolute top-0 left-0 w-[200%] h-full bg-gradient-to-r from-transparent via-purple-500/10 to-transparent animate-shimmer"></div>
                         </div>
 
                         <!-- Background Status Gradient (Subtle) -->
                         <div class="absolute inset-0 opacity-[0.03] transition-colors duration-500 pointer-events-none"
                              :class="{
-                                 'bg-purple-500': gen.status === 'PENDING_GEMINI' || gen.status === 'PENDING_LYRICS',
-                                 'bg-indigo-600': gen.status === 'PENDING_MUSIC',
+                                 'bg-purple-500': (gen.status === 'PENDING_GEMINI' || gen.status === 'PENDING_LYRICS') && (autoProcess || processingRowIds.has(gen.id)),
+                                 'bg-indigo-600': gen.status === 'PENDING_MUSIC' && (gen.suno_task_id || processingRowIds.has(gen.id)),
                                  'bg-green-500': gen.status === 'COMPLETED',
                                  'bg-blue-500': gen.status === 'DOWNLOADING'
                              }">
@@ -425,15 +603,15 @@ onUnmounted(() => {
 
                         <div class="flex flex-col md:flex-row items-center gap-4 p-4 relative z-10">
                             <!-- ID -->
-                            <div class="text-xs font-mono text-muted-foreground w-8 text-center">#{{ index + 1 }}</div>
+                            <div class="text-xs font-mono text-muted-foreground w-8 text-center">#{{ (generations?.length || 0) - index }}</div>
                             
                             <!-- Info -->
                             <div class="flex-1 min-w-0 grid grid-cols-1 md:grid-cols-2 gap-4">
                                 <!-- Col 1: Song Names / Status -->
                                 <div class="space-y-1">
                                     <div class="flex items-center gap-2">
-                                        <!-- Special Music Generation Status -->
-                                        <div v-if="gen.status === 'PENDING_MUSIC'" class="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
+                                        <!-- Special Music Generation Status (Active) -->
+                                        <div v-if="gen.status === 'PENDING_MUSIC' && (gen.suno_task_id || processingRowIds.has(gen.id))" class="flex items-center gap-2 text-indigo-400 bg-indigo-500/10 px-2 py-0.5 rounded-full border border-indigo-500/20">
                                             <!-- Animated Equalizer Icon -->
                                             <div class="flex gap-[2px] items-end h-3">
                                                 <div class="w-1 bg-indigo-400 rounded-sm animate-music-bar-1"></div>
@@ -443,8 +621,14 @@ onUnmounted(() => {
                                             <span class="text-[10px] font-bold tracking-wide uppercase animate-pulse">Generating Music...</span>
                                         </div>
 
-                                        <!-- Special Gemini Status -->
-                                        <div v-else-if="gen.status === 'PENDING_GEMINI' || gen.status === 'PENDING_LYRICS'" class="flex items-center gap-2 text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20">
+                                        <!-- Special Music Generation Status (Ready/Waiting) -->
+                                        <div v-else-if="gen.status === 'PENDING_MUSIC'" class="flex items-center gap-2 text-muted-foreground bg-secondary/50 px-2 py-0.5 rounded-full border border-white/5">
+                                             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg>
+                                            <span class="text-[10px] font-bold tracking-wide uppercase">Ready for Music</span>
+                                        </div>
+
+                                        <!-- Special Gemini Status (Active) -->
+                                        <div v-else-if="(gen.status === 'PENDING_GEMINI' || gen.status === 'PENDING_LYRICS') && (autoProcess || processingRowIds.has(gen.id))" class="flex items-center gap-2 text-purple-400 bg-purple-500/10 px-2 py-0.5 rounded-full border border-purple-500/20">
                                             <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="animate-spin-slow"><path d="M12 2v4"/><path d="m16.2 7.8 2.9-2.9"/><path d="M18 12h4"/><path d="m16.2 16.2 2.9 2.9"/><path d="M12 18v4"/><path d="m7.8 16.2-2.9 2.9"/><path d="M6 12H2"/><path d="m7.8 7.8-2.9-2.9"/></svg>
                                             <span class="text-[10px] font-bold tracking-wide uppercase animate-pulse">Dreaming...</span>
                                         </div>
@@ -487,7 +671,7 @@ onUnmounted(() => {
                                  <!-- Regen Buttons (Icon only) -->
                                  <div class="flex flex-col gap-1">
                                      <Button size="icon" variant="ghost" class="h-6 w-6 opacity-50 hover:opacity-100" 
-                                             :disabled="processingRowIds.has(gen.id)"
+                                             :disabled="processingRowIds.has(gen.id) || !!gen.audio_url_1"
                                              @click.stop="manualUpdateStatus(gen.id, 'PENDING_GEMINI')" title="Regen Info">
                                          <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12a9 9 0 0 0-9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/><path d="M3 12a9 9 0 0 0 9 9 9.75 9.75 0 0 0 6.74-2.74L21 16"/><path d="M16 16h5v5"/></svg>
                                      </Button>
@@ -502,18 +686,35 @@ onUnmounted(() => {
                                  <Button 
                                     size="icon" 
                                     :variant="gen.status === 'COMPLETED' ? 'default' : 'outline'" 
-                                    class="h-10 w-10 rounded-full transition-all"
+                                    class="h-10 w-10 rounded-full transition-all group relative"
                                     :class="gen.status === 'COMPLETED' ? 'bg-green-600 hover:bg-green-500' : ''"
                                     @click.stop="handleDownload(gen)"
                                     :disabled="isLoading || processingRowIds.has(gen.id) || !gen.audio_url_1"
                                  >
                                     <span v-if="processingRowIds.has(gen.id) && gen.status === 'DOWNLOADING'" class="animate-spin">⏳</span>
-                                    <svg v-else-if="gen.status === 'COMPLETED'" xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"/></svg>
-                                    <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                    
+                                    <!-- COMPLETED STATE: Swap Icons on Hover -->
+                                    <template v-else-if="gen.status === 'COMPLETED'">
+                                        <!-- Checkmark (Default Visible, Hover Hidden) -->
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" 
+                                             class="absolute transition-all duration-300 opacity-100 scale-100 rotate-0 group-hover:opacity-0 group-hover:scale-75 group-hover:-rotate-90">
+                                            <polyline points="20 6 9 17 4 12"/>
+                                        </svg>
+                                        <!-- Download (Default Hidden, Hover Visible) -->
+                                        <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" 
+                                             class="absolute transition-all duration-300 opacity-0 scale-75 rotate-90 group-hover:opacity-100 group-hover:scale-100 group-hover:rotate-0">
+                                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                                        </svg>
+                                    </template>
+
+                                    <!-- OTHER STATES: Default Download Icon -->
+                                    <svg v-else xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                        <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/>
+                                    </svg>
                                  </Button>
                                  
                                  <!-- Delete -->
-                                 <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive hover:bg-destructive/10" @click="deleteRow(gen.id)">
+                                 <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive hover:bg-destructive/10" @click.stop="deleteRow(gen.id)">
                                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                                  </Button>
                             </div>
@@ -536,7 +737,7 @@ onUnmounted(() => {
                 <div class="bg-card border border-white/10 text-card-foreground rounded-xl shadow-2xl w-full max-w-lg max-h-[80vh] flex flex-col overflow-hidden animate-in fade-in zoom-in-95 duration-200" @click.stop>
                     <div class="p-4 border-b border-white/5 flex justify-between items-center bg-white/5">
                         <h3 class="font-semibold text-lg tracking-tight">
-                            {{ activeModalType === 'prompt' ? 'Lyric Prompt' : 'Generated Lyrics' }}
+                            {{ activeModalType === 'prompt' ? 'Lyric Prompt' : activeModalType === 'lyrics' ? 'Generated Lyrics' : 'Confirm Deletion' }}
                         </h3>
                         <Button variant="ghost" size="icon" @click="closeModal" class="h-8 w-8 rounded-full hover:bg-white/10">
                             <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"></line><line x1="6" y1="6" x2="18" y2="18"></line></svg>
@@ -547,18 +748,33 @@ onUnmounted(() => {
                          <template v-if="activeModalType === 'prompt'">
                              {{ isJson(activeModalContent) ? JSON.parse(activeModalContent).p1 : activeModalContent }}
                          </template>
-                         <template v-else>
+                         <template v-else-if="activeModalType === 'lyrics'">
                              {{ isJson(activeModalContent) ? JSON.parse(activeModalContent).l1 : activeModalContent }}
+                         </template>
+                         <template v-else-if="activeModalType === 'delete'">
+                             <div class="text-center py-4 space-y-2">
+                                 <p class="text-base font-sans">Are you sure you want to delete this generation task?</p>
+                                 <p class="text-muted-foreground text-xs font-sans">This action cannot be undone.</p>
+                             </div>
                          </template>
                     </div>
 
-                    <div class="p-4 border-t border-white/5 bg-white/5 flex justify-end">
-                        <Button variant="default" size="sm" @click="closeModal">Close</Button>
+                    <div class="p-4 border-t border-white/5 bg-white/5 flex justify-end gap-3">
+                        <template v-if="activeModalType === 'delete'">
+                            <Button variant="ghost" size="sm" @click="closeModal">Cancel</Button>
+                            <Button variant="destructive" size="sm" @click="confirmDelete" class="bg-red-600 hover:bg-red-700 text-white">Delete</Button>
+                        </template>
+                        <Button v-else variant="default" size="sm" @click="closeModal">Close</Button>
                     </div>
                 </div>
             </div>
         </Transition>
     </Teleport>
+
+    <StyleTagsModal 
+        v-model="showStyleModal" 
+        v-model:tags="styleTags" 
+    />
   </div>
 </template>
 
@@ -605,4 +821,11 @@ onUnmounted(() => {
 .animate-music-bar-2 { animation: music-bar 0.8s infinite ease-in-out 0.1s; }
 .animate-music-bar-3 { animation: music-bar 0.7s infinite ease-in-out 0.2s; }
 
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+.no-scrollbar {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
 </style>

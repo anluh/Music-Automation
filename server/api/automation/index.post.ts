@@ -1,6 +1,6 @@
 export default defineEventHandler(async (event) => {
     const body = await readBody(event)
-    const { mood, stylePrompt, weirdnessMin, weirdnessMax, bpmMin, bpmMax, styleInfluenceMin, styleInfluenceMax, songCount, outputFolder } = body
+    const { mood, stylePrompt, tags, weirdnessMin, weirdnessMax, bpmMin, bpmMax, styleInfluenceMin, styleInfluenceMax, songCount, outputFolder } = body
 
     if (!mood) {
         throw createError({
@@ -20,9 +20,14 @@ export default defineEventHandler(async (event) => {
 
     const insert = db.transaction((generationsToCreate: number) => {
         for (let i = 0; i < generationsToCreate; i++) {
+            let currentStyle = stylePrompt || ''
+            if (tags && Array.isArray(tags) && tags.length > 0) {
+                currentStyle = tags[i % tags.length]
+            }
+
             const info = stmt.run(
                 mood,
-                stylePrompt || '',
+                currentStyle,
                 weirdnessMin || 40, weirdnessMax || 60,
                 bpmMin || 100, bpmMax || 130,
                 styleInfluenceMin || 40, styleInfluenceMax || 60

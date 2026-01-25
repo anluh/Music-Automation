@@ -1,6 +1,7 @@
-
 import { join } from 'node:path'
 import { existsSync, mkdirSync, readdirSync, writeFileSync } from 'node:fs'
+// @ts-ignore
+import { downloadManager } from '../../utils/downloader'
 
 
 export default defineEventHandler(async (event) => {
@@ -123,35 +124,40 @@ export default defineEventHandler(async (event) => {
         if (row.status === 'DOWNLOADING') {
             if (!outputFolder) throw createError({ statusCode: 400, statusMessage: 'Output folder required' })
 
-            // Helper to download
-            const downloadFile = async (url: string, prefix: string, songName: string) => {
-                const blob = await $fetch(url, { responseType: 'blob' }) as Blob
-                const buffer = Buffer.from(await blob.arrayBuffer())
+            // Get Settings for Playlist Size (Default to 20 if not set)
+            const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize'").get() as any
+            const maxSongs = settingsRow ? parseInt(settingsRow.value) : 20
 
-                let batchIdx = 1
-                while (true) {
-                    const batchDir = join(outputFolder, `Batch_${String(batchIdx).padStart(2, '0')}`)
-                    if (!existsSync(batchDir)) mkdirSync(batchDir, { recursive: true })
+            console.log(`[Process] Downloading with max songs: ${maxSongs}`)
 
-                    const files = readdirSync(batchDir)
-                    if (files.length < 10) {
-                        const safeName = songName.replace(/[^a-z0-9]/gi, '_').toLowerCase()
-                        const path = join(batchDir, `${prefix}_${safeName}.mp3`)
-                        writeFileSync(path, buffer)
-                        return path
-                    }
-                    batchIdx++
-                }
-            }
+            // 1. Download Song 1
+            const res1 = await downloadManager.process({
+                url: row.audio_url_1,
+                filename: row.song_name_1,
+                outputFolder,
+                maxSongsPerPlaylist: maxSongs
+            })
 
-            const path1 = await downloadFile(row.audio_url_1, '1', row.song_name_1)
-            const path2 = await downloadFile(row.audio_url_2, '2', row.song_name_2 || row.song_name_1 + '_v2')
+            if (!res1.success) throw new Error(`Failed to download song 1: ${res1.error}`)
+
+            // 2. Download Song 2 (Avoid the folder used by Song 1 if possible)
+            const avoid = res1.folderUsed ? [res1.folderUsed] : []
+
+            const res2 = await downloadManager.process({
+                url: row.audio_url_2,
+                filename: row.song_name_2 || (row.song_name_1 + ' v2'),
+                outputFolder,
+                maxSongsPerPlaylist: maxSongs,
+                avoidFolders: avoid
+            })
+
+            if (!res2.success) throw new Error(`Failed to download song 2: ${res2.error}`)
 
             db.prepare(`
-      UPDATE generations 
-      SET local_path_1 = ?, local_path_2 = ?, status = 'COMPLETED' 
-      WHERE id = ?
-    `).run(path1, path2, id)
+              UPDATE generations 
+              SET local_path_1 = ?, local_path_2 = ?, status = 'COMPLETED' 
+              WHERE id = ?
+            `).run(res1.path, res2.path, id)
 
             return { status: 'COMPLETED', msg: 'Files downloaded' }
         }

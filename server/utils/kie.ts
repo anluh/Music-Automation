@@ -20,7 +20,8 @@ export const kie = {
         // We ask for exactly 'count' songs.
         const prompt = `
       Generate a list of 2 unique song titles and ONE short lyric prompt based on the mood: "${mood}".
-      Target tracks with repetitive and viral lyrics.
+      Target 5 minutes long tracks with repetitive and viral lyrics.
+      Avoid sensitive words.
       The output must be valid JSON in the following format:
       {
         "title1": "Song Title 1",
