@@ -483,8 +483,8 @@ onUnmounted(() => {
         <div>
             <div @click="navigateTo('/')" class="cursor-pointer group flex items-baseline gap-3 transition-all duration-300 hover:drop-shadow-[0_0_15px_rgba(139,92,246,0.5)]">
                 <h1 class="text-4xl md:text-5xl font-extrabold tracking-tighter self-end">
-                    <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Sonic</span>
-                    <span class="text-foreground">Forge</span>
+                    <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track</span>
+                    <span class="text-foreground">Tunnel</span>
                 </h1>
                 <span v-if="workflowName" class="text-2xl md:text-3xl font-bold text-indigo-400/80 tracking-tight">/ {{ workflowName }}</span>
             </div>

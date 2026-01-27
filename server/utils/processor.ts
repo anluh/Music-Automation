@@ -21,6 +21,13 @@ export const processGeneration = async (id: number) => {
     settingsRows.forEach(r => settings[r.key] = r.value)
 
     const outputFolder = settings.outputFolder || 'C:\\MusicOutput' // Default
+
+    // Resolve Workflow Name for subfolder
+    const workflowRow = db.prepare('SELECT name FROM workflows WHERE id = ?').get(row.workflow_id) as any
+    const workflowName = workflowRow ? workflowRow.name : 'Default'
+    const safeWorkflowName = workflowName.replace(/[^a-z0-9 \-_]/gi, '').trim()
+    const finalOutputFolder = join(outputFolder, safeWorkflowName)
+
     const maxSongs = settings.playlistSize ? parseInt(settings.playlistSize) : 20
 
     // --- STEP 1: GEMINI ---
@@ -51,24 +58,33 @@ export const processGeneration = async (id: number) => {
         // Ensure kie is available
         if (!kie || !kie.generateSongList) throw new Error('Kie utility not found')
 
-        const songs = await kie.generateSongList(row.mood, 2, previousTitles)
+        const songs = await kie.generateSongList(row.mood, row.style_prompt || '', 2, previousTitles)
         console.log('[Processor] Gemini Response:', songs)
+
+        // Determine next status based on Instrument switch
+        const nextStatus = row.is_instrumental ? 'PENDING_MUSIC' : 'PENDING_LYRICS'
+
+        // If Instrumental, we use the prompt from Gemini directly as the description for Suno
+        // If Lyrics needed, we store it for the lyrics step
+        // We stick to the JSON structure { p1: ... } for consistency
+        const lyricPromptVal = JSON.stringify({ p1: songs.lyric_prompt })
 
         // Update DB
         db.prepare(`
       UPDATE generations 
       SET song_name_1 = ?, lyric_prompt = ?, 
           song_name_2 = ?, 
-          status = 'PENDING_LYRICS'
+          status = ?
       WHERE id = ?
     `).run(
             songs.title1,
-            JSON.stringify({ p1: songs.lyric_prompt }),
+            lyricPromptVal,
             songs.title2,
+            nextStatus,
             id
         )
 
-        return { status: 'PENDING_LYRICS', msg: 'Gemini generation complete' }
+        return { status: nextStatus, msg: `Gemini generation complete. Next: ${nextStatus}` }
     }
 
     // --- STEP 2: LYRICS ---
@@ -153,7 +169,7 @@ export const processGeneration = async (id: number) => {
         const res1 = await downloadManager.process({
             url: row.audio_url_1,
             filename: row.song_name_1,
-            outputFolder,
+            outputFolder: finalOutputFolder,
             maxSongsPerPlaylist: maxSongs
         })
 
@@ -165,7 +181,7 @@ export const processGeneration = async (id: number) => {
         const res2 = await downloadManager.process({
             url: row.audio_url_2,
             filename: row.song_name_2 || (row.song_name_1 + ' v2'),
-            outputFolder,
+            outputFolder: finalOutputFolder,
             maxSongsPerPlaylist: maxSongs,
             avoidFolders: avoid
         })

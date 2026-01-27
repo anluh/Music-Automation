@@ -55,7 +55,7 @@ onMounted(() => {
 <template>
 <div class="container mx-auto p-10 max-w-5xl space-y-10">
     <header class="text-center space-y-4">
-        <h1 class="text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Sonic Forge</h1>
+        <h1 class="text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track Tunnel</h1>
         <p class="text-muted-foreground text-lg">Manage your automation workflows</p>
     </header>
 

@@ -17,7 +17,7 @@ const getHeaders = () => {
 
 export const kie = {
     // Gemini / Chat
-    async generateSongList(mood: string, count: number, excludedTitles: string[] = []) {
+    async generateSongList(mood: string, styleTags: string, count: number, excludedTitles: string[] = []) {
         // We ask for exactly 'count' songs.
 
         let exclusionText = ''
@@ -29,24 +29,27 @@ export const kie = {
         }
 
         const prompt = `
-      Generate a list of 2 unique song titles and ONE short lyric prompt based on the mood: "${mood}".
+      Generate a list of 2 unique song titles and ONE short music description prompt based on the mood: "${mood}" and style tags: "${styleTags}".
       
       TITLES INSTRUCTIONS:
       - Must be innovative and BASED ON CURRENT VIRAL & US MUSIC TRENDS.
       - Sometimes can use modern slang (Gen Z/Alpha) or well-known foreign words understood in the US.
-      - Titles should rarely be duplicated and should mirror the lyric prompt's vibe.
+      - Titles should rarely be duplicated and should mirror the music description's vibe.
       ${exclusionText}
 
       RANDOMNESS SEED: ${Math.random()} (Use this to diverge from previous outputs)
 
-      Target 5 minutes long tracks with repetitive and viral lyrics.
-      Avoid sensitive words.
+      PROMPT INSTRUCTIONS:
+      - Create a single "lyric_prompt" value that serves as a Suno music description.
+      - MERGE the Mood ("${mood}") and Style Tags ("${styleTags}") into a cohesive, descriptive string.
+      - The description MUST be under 490 characters.
+      - Focus on the vibe, instruments, pacing, and emotional tone.
       
       The output must be valid JSON in the following format:
       {
         "title1": "Innovative Title 1",
         "title2": "Innovative Title 2",
-        "lyric_prompt": "Shared description for both songs...under 200 characters"
+        "lyric_prompt": "Merged description of mood and style... under 490 chars"
       }
       Do not include any markdown formatting or explanations, just the JSON object.
     `
