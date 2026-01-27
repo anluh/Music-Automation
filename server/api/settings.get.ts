@@ -2,8 +2,11 @@ import { join } from 'node:path'
 
 export default defineEventHandler(async (event) => {
     const db = useDB()
-    const stmts = db.prepare('SELECT key, value FROM settings')
-    const rows = stmts.all() as { key: string, value: string }[]
+    const query = getQuery(event)
+    const workflowId = query.workflowId || 1
+
+    const stmts = db.prepare('SELECT key, value FROM settings WHERE workflow_id = ?')
+    const rows = stmts.all(workflowId) as { key: string, value: string }[]
 
     // Convert to object
     const settings: Record<string, string> = {}

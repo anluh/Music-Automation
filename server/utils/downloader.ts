@@ -7,6 +7,7 @@ interface DownloadOptions {
     outputFolder: string
     maxSongsPerPlaylist?: number
     avoidFolders?: string[] // List of folders to avoid (e.g. for the second song of a pair)
+    flatStructure?: boolean
 }
 
 interface DownloadResult {
@@ -87,13 +88,14 @@ export const downloadManager = {
      */
     async process(opts: DownloadOptions): Promise<DownloadResult> {
         try {
-            const { url, filename, outputFolder, maxSongsPerPlaylist = 20, avoidFolders = [] } = opts
+            const { url, filename, outputFolder, maxSongsPerPlaylist = 20, avoidFolders = [], flatStructure = false } = opts
 
             logToFile(`[Process] Request: ${filename}`)
             logToFile(`[Process] CWD: ${process.cwd()}`)
             logToFile(`[Process] URL: ${url}`)
             logToFile(`[Process] Out: ${outputFolder}`)
             logToFile(`[Process] Max: ${maxSongsPerPlaylist}`)
+            logToFile(`[Process] Flat: ${flatStructure}`)
 
             // 1. Ensure Output Root Exists
             if (!existsSync(outputFolder)) {
@@ -101,7 +103,10 @@ export const downloadManager = {
             }
 
             // 2. Find Target Subfolder
-            const targetFolder = this.findTargetFolder(outputFolder, maxSongsPerPlaylist, avoidFolders)
+            let targetFolder = outputFolder
+            if (!flatStructure) {
+                targetFolder = this.findTargetFolder(outputFolder, maxSongsPerPlaylist, avoidFolders)
+            }
             logToFile(`[Process] Target: ${targetFolder}`)
 
             // 3. Prepare File Path

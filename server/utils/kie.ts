@@ -1,6 +1,7 @@
 
 
 
+
 const KIE_BASE_URL = 'https://api.kie.ai'
 
 const getHeaders = () => {
@@ -16,17 +17,36 @@ const getHeaders = () => {
 
 export const kie = {
     // Gemini / Chat
-    async generateSongList(mood: string, count: number) {
+    async generateSongList(mood: string, count: number, excludedTitles: string[] = []) {
         // We ask for exactly 'count' songs.
+
+        let exclusionText = ''
+        if (excludedTitles.length > 0) {
+            exclusionText = `
+      NEGATIVE CONSTRAINTS (CRITICAL):
+      - DO NOT use any of the following titles: ${excludedTitles.join(', ')}
+      - Do not use titles that are very similar to these.`
+        }
+
         const prompt = `
       Generate a list of 2 unique song titles and ONE short lyric prompt based on the mood: "${mood}".
+      
+      TITLES INSTRUCTIONS:
+      - Must be innovative and BASED ON CURRENT VIRAL & US MUSIC TRENDS.
+      - Sometimes can use modern slang (Gen Z/Alpha) or well-known foreign words understood in the US.
+      - Titles should rarely be duplicated and should mirror the lyric prompt's vibe.
+      ${exclusionText}
+
+      RANDOMNESS SEED: ${Math.random()} (Use this to diverge from previous outputs)
+
       Target 5 minutes long tracks with repetitive and viral lyrics.
       Avoid sensitive words.
+      
       The output must be valid JSON in the following format:
       {
-        "title1": "Song Title 1",
-        "title2": "Song Title 2",
-        "lyric_prompt": "Shared description for both songs..."
+        "title1": "Innovative Title 1",
+        "title2": "Innovative Title 2",
+        "lyric_prompt": "Shared description for both songs...under 200 characters"
       }
       Do not include any markdown formatting or explanations, just the JSON object.
     `
@@ -162,7 +182,7 @@ export const kie = {
     },
 
     // Suno Music
-    async generateMusic(payload: { prompt: string; tags?: string; mv?: string; title?: string; weirdness?: number; bpm?: number; styleInfluence?: number; callbackUrl?: string, customMode?: boolean }) {
+    async generateMusic(payload: { prompt: string; tags?: string; mv?: string; title?: string; weirdness?: number; bpm?: number; styleInfluence?: number; callbackUrl?: string, customMode?: boolean, vocalGender?: string, instrumental?: boolean }) {
         try {
             // Endpoint: /api/v1/generate
             // Mapping internal 'tags' to API 'style'.
@@ -175,31 +195,22 @@ export const kie = {
                 style = `${payload.bpm} bpm, ${style}`
             }
 
-            const customMode = payload.customMode !== undefined ? payload.customMode : true
             let prompt = payload.prompt
 
-            // If Description Mode (customMode=false), apped style to prompt so it is used
-            // Suno API ignores 'style' field in Description Mode.
-            if (!customMode && style) {
-                prompt = `${prompt} ${style}`
-            }
-
-            // Truncate if too long (Suno Limit: 500 chars for Description Mode)
-            if (!customMode && prompt.length > 490) {
-                console.warn(`[Kie] Truncating prompt from ${prompt.length} to 490 chars`)
-                prompt = prompt.substring(0, 490)
-            }
+            // If Description Mode (customMode=false), Suno expects a description of the music style.
+            // User requested NOT to append style to prompt.
 
             const apiPayload = {
-                customMode: customMode,
-                prompt: prompt, // Lyrics OR Description (with style appended if Desc mode)
-                style: style, // Style tags + BPM (Ignored in Desc mode, but kept for Custom mode)
+                customMode: true,
+                prompt: prompt,
+                style: style,
                 title: payload.title || '',
                 model: 'V5',
                 callBackUrl: payload.callbackUrl || 'https://google.com',
-                weirdnessConstraint: payload.weirdness, // Updated key
-                styleWeight: payload.styleInfluence, // Updated key
-                instrumental: false
+                weirdnessConstraint: payload.weirdness ? payload.weirdness / 100 : undefined,
+                styleWeight: payload.styleInfluence ? payload.styleInfluence / 100 : undefined,
+                vocalGender: payload.vocalGender,
+                instrumental: payload.instrumental
             }
 
             console.log('[Kie] Generating Music with payload:', apiPayload)

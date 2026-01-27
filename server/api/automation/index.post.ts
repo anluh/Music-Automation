@@ -1,42 +1,24 @@
+import { createGenerations } from '../../utils/generator'
+
 export default defineEventHandler(async (event) => {
     const body = await readBody(event)
-    const { mood, stylePrompt, tags, weirdnessMin, weirdnessMax, bpmMin, bpmMax, styleInfluenceMin, styleInfluenceMax, songCount, outputFolder } = body
+    const { mood, songCount, workflowId } = body
 
-    if (!mood) {
-        throw createError({
-            statusCode: 400,
-            statusMessage: 'Mood is required',
-        })
-    }
+    // Explicit import if needed, though Nuxt auto-imports. 
+    // Just ensuring variables are defined.
+    // const db = useDB() // removed as it is used inside createGenerations
 
-    const db = useDB()
-    const stmt = db.prepare(`
-    INSERT INTO generations (mood, style_prompt, weirdness_min, weirdness_max, bpm_min, bpm_max, style_influence_min, style_influence_max, status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'PENDING_GEMINI')
-  `)
+    // We need to validate mood here or let createGenerations do it.
+    // createGenerations throws, so we catch it? No, global handler catches it.
 
     const count = parseInt(songCount) || 1
-    const ids: (number | bigint)[] = []
 
-    const insert = db.transaction((generationsToCreate: number) => {
-        for (let i = 0; i < generationsToCreate; i++) {
-            let currentStyle = stylePrompt || ''
-            if (tags && Array.isArray(tags) && tags.length > 0) {
-                currentStyle = tags[i % tags.length]
-            }
 
-            const info = stmt.run(
-                mood,
-                currentStyle,
-                weirdnessMin || 40, weirdnessMax || 60,
-                bpmMin || 100, bpmMax || 130,
-                styleInfluenceMin || 40, styleInfluenceMax || 60
-            )
-            ids.push(info.lastInsertRowid)
-        }
-    })
+    const wId = workflowId || 1
 
-    insert(count)
+    // Use the utility
+    const ids = createGenerations(wId, count, body)
+
 
     // Trigger background worker (in a real queue system, we'd push to queue. 
     // Here we can just conceptually know it's ready for processing)

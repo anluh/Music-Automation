@@ -13,11 +13,19 @@ const log = (msg: string) => {
 export default defineEventHandler(async (event) => {
     try {
         const body = await readBody(event)
-        const { url, filename, outputFolder, avoidFolders = [] } = body
+        const { url, filename, avoidFolders = [], targetDownloads = false, workflowId } = body
+        let { outputFolder } = body
+
+        if (targetDownloads) {
+            const os = await import('node:os')
+            outputFolder = join(os.homedir(), 'Downloads')
+        }
 
         log(`API Request received: ${filename}`)
         log(`Target: ${outputFolder}`)
         log(`Avoid: ${JSON.stringify(avoidFolders)}`)
+        log(`Target Downloads: ${targetDownloads}`)
+        log(`Workflow ID: ${workflowId}`)
         log(`URL: ${url}`)
 
         if (!url || !filename || !outputFolder) {
@@ -26,8 +34,17 @@ export default defineEventHandler(async (event) => {
         }
 
         const db = useDB()
-        const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize'").get() as any
-        const maxSongs = settingsRow ? parseInt(settingsRow.value) : 20
+        let maxSongs = 20
+
+        if (workflowId) {
+            const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize' AND workflow_id = ?").get(workflowId) as any
+            if (settingsRow) maxSongs = parseInt(settingsRow.value)
+        } else {
+            // Fallback for legacy calls (though we should always pass it now)
+            const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize'").get() as any
+            if (settingsRow) maxSongs = parseInt(settingsRow.value)
+        }
+
         log(`Settings loaded. Max songs: ${maxSongs}`)
 
         const result = await downloadManager.process({
@@ -35,7 +52,8 @@ export default defineEventHandler(async (event) => {
             filename,
             outputFolder,
             maxSongsPerPlaylist: maxSongs,
-            avoidFolders: avoidFolders
+            avoidFolders: avoidFolders,
+            flatStructure: targetDownloads
         })
 
         if (!result.success) {
