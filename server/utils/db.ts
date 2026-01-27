@@ -2,7 +2,7 @@ import Database from 'better-sqlite3'
 import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 
-let db: Database.Database | null = null
+let db: any = null
 
 export const useDB = () => {
   if (db) return db
@@ -35,6 +35,14 @@ export const useDB = () => {
 
       console.log('[DB] Migration complete.')
     }
+
+    const info2 = db.pragma('table_info(generations)') as any[]
+    if (!info2.some(col => col.name === 'archived_at')) {
+      console.log('[DB] Migrating generations table to include archived_at...')
+      db.prepare('ALTER TABLE generations ADD COLUMN archived_at DATETIME').run()
+      console.log('[DB] Archive Migration complete.')
+    }
+
   } catch (e) {
     console.error('[DB] Migration failed', e)
   }

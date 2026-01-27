@@ -13,7 +13,7 @@ const log = (msg: string) => {
 export default defineEventHandler(async (event) => {
     try {
         const body = await readBody(event)
-        const { url, filename, avoidFolders = [], targetDownloads = false, workflowId } = body
+        const { url, filename, avoidFolders = [], targetDownloads = false, workflowId, flat = false } = body
         let { outputFolder } = body
 
         if (targetDownloads) {
@@ -25,6 +25,7 @@ export default defineEventHandler(async (event) => {
         log(`Target: ${outputFolder}`)
         log(`Avoid: ${JSON.stringify(avoidFolders)}`)
         log(`Target Downloads: ${targetDownloads}`)
+        log(`Flat: ${flat}`)
         log(`Workflow ID: ${workflowId}`)
         log(`URL: ${url}`)
 
@@ -53,7 +54,7 @@ export default defineEventHandler(async (event) => {
             outputFolder,
             maxSongsPerPlaylist: maxSongs,
             avoidFolders: avoidFolders,
-            flatStructure: targetDownloads
+            flatStructure: targetDownloads || flat
         })
 
         if (!result.success) {

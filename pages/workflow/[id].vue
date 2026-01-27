@@ -65,6 +65,67 @@ const { data: generations, refresh, error } = await useFetch('/api/automation', 
   transform: (response: any) => response.data
 })
 
+const showArchives = ref(false)
+
+const activeGenerations = computed(() => {
+    if (!generations.value) return []
+    return generations.value.filter((g: any) => !g.archived_at)
+})
+
+const archivedGroups = computed(() => {
+    if (!generations.value) return []
+    const archived = generations.value.filter((g: any) => g.archived_at)
+    
+    // Group by exact archived_at timestamp
+    const groups: Record<string, any[]> = {}
+    archived.forEach((g: any) => {
+        const key = g.archived_at
+        if (!groups[key]) groups[key] = []
+        groups[key].push(g)
+    })
+    
+    // Sort groups by date desc
+    return Object.entries(groups)
+        .sort((a, b) => new Date(b[0]).getTime() - new Date(a[0]).getTime())
+        .map(([date, items]) => ({ 
+            date, 
+            items, 
+            expanded: expandedArchiveKeys.value.has(date) 
+        }))
+})
+
+// Track expanded states persistently by date key
+const expandedArchiveKeys = ref(new Set<string>())
+
+
+const toggleArchiveGroup = (group: any) => {
+    const newSet = new Set(expandedArchiveKeys.value)
+    if (newSet.has(group.date)) {
+        newSet.delete(group.date)
+    } else {
+        newSet.add(group.date)
+    }
+    expandedArchiveKeys.value = newSet
+}
+
+const isDownloadable = (date: string) => {
+    const diff = new Date().getTime() - new Date(date).getTime()
+    const days = diff / (1000 * 60 * 60 * 24)
+    return days < 15
+}
+
+const archiveCompleted = async () => {
+    try {
+        await $fetch('/api/automation/archive', {
+            method: 'POST',
+            body: { workflowId: workflowId.value }
+        })
+        refresh()
+    } catch (e) {
+        console.error('Failed to archive', e)
+    }
+}
+
 // Polling
 let pollInterval: NodeJS.Timeout
 
@@ -319,12 +380,62 @@ const handleDownload = async (gen: any) => {
     }
 }
 
+const downloadArchivedTrack = async (gen: any) => {
+    if (processingRowIds.value.has(gen.id)) return
+    
+    // Check if within 15 days (double check though UI should hide it)
+    if (!gen.created_at || !isDownloadable(gen.created_at)) {
+        alert('This track is too old to be downloaded.')
+        return
+    }
+
+    const base = outputFolder.value || 'C:\\MusicOutput'
+    const outputTarget = workflowName.value ? `${base}\\${workflowName.value}` : base
+
+    processingRowIds.value.add(gen.id)
+    try {
+        if (gen.audio_url_1) {
+            await $fetch('/api/download_to_disk', {
+                method: 'POST',
+                body: { 
+                    url: gen.audio_url_1, 
+                    filename: gen.song_name_1 || 'track1', 
+                    outputFolder: outputTarget,
+                    workflowId: workflowId.value,
+                    flat: true // Force flat structure
+                }
+            })
+        }
+        if (gen.audio_url_2) {
+             await new Promise(resolve => setTimeout(resolve, 500))
+             await $fetch('/api/download_to_disk', {
+                method: 'POST',
+                body: { 
+                    url: gen.audio_url_2, 
+                    filename: gen.song_name_2 || 'track2', 
+                    outputFolder: outputTarget,
+                    workflowId: workflowId.value,
+                    flat: true // Force flat structure
+                }
+            })
+        }
+        // Visual feedback
+        const originalStatus = gen.status
+        gen.status = 'COMPLETED' // Ensure it shows complete or some feedback if wanted, though it's archived.
+    } catch(e) {
+        console.error('Archive download failed', e)
+        alert('Download failed')
+    } finally {
+        processingRowIds.value.delete(gen.id)
+    }
+}
+
 // Watcher for Auto-Download
 watch([generations, autoDownload], () => {
     if (!autoDownload.value || !generations.value) return
     
     // Find items ready to download
-    const readyItems = generations.value.filter((g: any) => g.status === 'READY_TO_DOWNLOAD')
+    const readyItems = activeGenerations.value.filter((g: any) => g.status === 'READY_TO_DOWNLOAD')
     
     readyItems.forEach(async (gen: any) => {
         if (!processingRowIds.value.has(gen.id)) {
@@ -494,7 +605,6 @@ onUnmounted(() => {
         </div>
         
         <div class="flex items-center gap-3">
-             <!-- Dashboard Link Removed (Logo is link) -->
              <Button variant="secondary" size="sm" @click="downloadAll" :disabled="autoDownload || !generations || generations.length === 0" class="hover:bg-primary/20 transition-colors">
                  Download All
              </Button>
@@ -619,7 +729,10 @@ onUnmounted(() => {
                 </div>
             </CardContent>
             <CardFooter class="bg-black/20 py-4 flex justify-end items-center border-t border-white/5 gap-4">
-                <div class="flex items-center gap-3">
+                <div class="flex items-center gap-3 w-full"> 
+                     <Button variant="ghost" size="sm" @click="archiveCompleted" class="hover:bg-primary/20 transition-colors text-muted-foreground hover:text-foreground mr-auto">
+                        Archive Completed
+                     </Button>
                      <Label class="text-xs whitespace-nowrap">Batch Count:</Label>
                      <Input type="number" min="1" max="50" v-model.number="songCount" class="w-20 bg-background/50 border-white/10 text-center" />
                 </div>
@@ -636,12 +749,62 @@ onUnmounted(() => {
     <section class="space-y-4">
         <div class="flex items-center justify-between px-2">
             <h2 class="text-lg font-semibold text-muted-foreground">Recent Generations</h2>
-            <Badge variant="outline" class="font-mono text-[10px]">{{ generations?.length || 0 }} Items</Badge>
+            <div class="flex items-center gap-3">
+                 <div v-if="archivedGroups.length > 0" class="flex items-center gap-2">
+                    <Button variant="ghost" size="sm" @click="showArchives = !showArchives" class="h-6 text-xs text-muted-foreground px-2">
+                        {{ showArchives ? 'Hide Archives' : `Show Archives (${archivedGroups.length})` }}
+                    </Button>
+                </div>
+                <Badge variant="outline" class="font-mono text-[10px]">{{ activeGenerations.length }} Items</Badge>
+            </div>
+        </div>
+
+        <!-- Archives Section -->
+        <div v-if="showArchives" class="space-y-4 mb-6">
+            <div v-for="group in archivedGroups" :key="group.date" class="border border-white/5 rounded-lg overflow-hidden bg-black/20">
+                <div @click="toggleArchiveGroup(group)" 
+                     class="flex items-center justify-between p-3 cursor-pointer hover:bg-white/5 transition-colors select-none">
+                    <div class="flex items-center gap-3">
+                        <span class="text-xs font-mono text-muted-foreground">
+                            {{ new Date(group.date).toLocaleDateString() }} {{ new Date(group.date).toLocaleTimeString() }}
+                        </span>
+                        <Badge variant="secondary" class="text-[10px]">{{ group.items.length }} Tracks</Badge>
+                    </div>
+                    <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+                         class="transition-transform duration-300 transform" :class="{ 'rotate-180': group.expanded }">
+                         <polyline points="6 9 12 15 18 9"/>
+                    </svg>
+                </div>
+                
+                <div v-if="group.expanded" class="grid gap-2 p-3 bg-black/10 border-t border-white/5">
+                    <template v-for="(gen, index) in group.items" :key="gen.id">
+                        <!-- Reusing the Card Logic but simplified for archive view if needed, or identical -->
+                         <!-- Using a simplified list item for archive to save space -->
+                        <div class="flex items-center gap-4 p-2 rounded hover:bg-white/5 border border-transparent hover:border-white/5 group-hover:bg-white/5">
+                             <div class="text-[10px] font-mono text-muted-foreground w-6 text-center">#{{ index + 1 }}</div>
+                             <div class="flex-1 min-w-0">
+                                 <div class="text-xs font-medium truncate text-foreground/80">{{ gen.song_name_1 || 'Untitled' }}</div>
+                                 <div class="text-[10px] text-muted-foreground truncate">{{ gen.song_name_2 || 'Untitled' }}</div>
+                             </div>
+                             
+                             <div class="flex items-center gap-2">
+                                 <!-- Archive Download Button -->
+                                 <Button v-if="gen.created_at && isDownloadable(gen.created_at)" 
+                                         size="icon" variant="ghost" class="h-6 w-6 text-muted-foreground hover:text-foreground"
+                                         @click.stop="downloadArchivedTrack(gen)"
+                                         :disabled="processingRowIds.has(gen.id)">
+                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+                                 </Button>
+                             </div>
+                        </div>
+                    </template>
+                </div>
+            </div>
         </div>
 
         <div class="grid gap-3">
              <TransitionGroup name="list">
-                <template v-for="(gen, index) in generations" :key="gen.id">
+                <template v-for="(gen, index) in activeGenerations" :key="gen.id">
                     <Card class="group relative overflow-hidden transition-all duration-300 bg-card/60 backdrop-blur-sm"
                           :class="[
                               gen.status === 'PENDING_MUSIC' 
