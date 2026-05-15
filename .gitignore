@@ -24,3 +24,4 @@ logs
 !.env.example
 
 dist_electron
+dist_electron_fresh

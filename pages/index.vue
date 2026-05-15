@@ -97,8 +97,8 @@ onMounted(() => {
 <div class="container mx-auto p-10 max-w-5xl space-y-10">
     <header class="text-center space-y-4">
         <div class="flex flex-col items-center justify-center gap-4">
-            <img src="/logo.png" alt="Track Tunnel Logo" class="h-24 w-24 object-contain drop-shadow-[0_0_15px_rgba(139,92,246,0.3)]" />
-            <h1 class="text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track Tunnel</h1>
+            <img src="/logo.png" alt="TrackTunnel Logo" class="h-24 w-24 object-contain drop-shadow-[0_0_15px_rgba(139,92,246,0.3)]" />
+            <h1 class="text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">TrackTunnel</h1>
         </div>
         <p class="text-muted-foreground text-lg">Manage your automation workflows</p>
     </header>

@@ -4,8 +4,8 @@
 
 const KIE_BASE_URL = 'https://api.kie.ai'
 
-const getHeaders = () => {
-    const apiKey = process.env.KIE_API_KEY
+const getHeaders = (apiKeyOverride?: string) => {
+    const apiKey = apiKeyOverride?.trim() || process.env.KIE_API_KEY
     if (!apiKey) {
         throw new Error('KIE_API_KEY is not set')
     }
@@ -17,7 +17,7 @@ const getHeaders = () => {
 
 export const kie = {
     // Gemini / Chat
-    async generateSongList(mood: string, styleTags: string, count: number, excludedTitles: string[] = [], isInstrumental: boolean = false) {
+    async generateSongList(mood: string, styleTags: string, count: number, excludedTitles: string[] = [], isInstrumental: boolean = false, apiKey?: string) {
         // We ask for exactly 'count' songs.
 
         let exclusionText = ''
@@ -28,30 +28,35 @@ export const kie = {
       - Do not use titles that are very similar to these.`
         }
 
-        const mergeInstruction = isInstrumental
-            ? `- MERGE the Mood ("${mood}") and Style Tags ("${styleTags}") into a cohesive, descriptive string.`
-            : `
-      - The description should be based ONLY on the mood ("${mood}").
-      - DO NOT include the specific style tags ("${styleTags}") in the description, as they are applied separately.
-      - Focus on the lyrical theme and emotional vibe.`
-
         const prompt = `
-      Generate a list of 2 unique song titles and ONE short music description prompt based on the mood: "${mood}" and style tags: "${styleTags}".
+      Generate 2 unique song titles and ONE lyric brief.
+
+      MOOD / LYRIC THEME (PRIMARY SOURCE):
+      "${mood}"
+
+      STYLE TAGS (ARRANGEMENT ONLY, DO NOT USE AS THE LYRIC THEME):
+      "${styleTags}"
       
       TITLES INSTRUCTIONS:
-      - Must be innovative and BASED ON CURRENT VIRAL & US MUSIC TRENDS.
+      - Titles must come from the mood/theme, not from the style tags.
+      - Titles must preserve the language of the mood.
+      - Do not translate non-English mood ideas into English titles.
+      - Titles must be natural, memorable, and not weird.
+      ${exclusionText}
 
-      PROMPT INSTRUCTIONS:
-      - Create a single "lyric_prompt" value that serves as a Suno music description.
-      ${mood}
-      - The description MUST be under 490 characters.
-      - Focus on the vibe, instruments, pacing, and emotional tone.
+      LYRIC BRIEF INSTRUCTIONS:
+      - Create "lyric_prompt" as a lyrical story/theme brief, not a production/style prompt.
+      - Base it directly on the user's mood text above.
+      - Preserve the user's language if the mood is not English.
+      - Include concrete emotion, situation, imagery, and point of view from the mood.
+      - Do NOT mention genres, BPM, instruments, production terms, mix, pads, bass, reverb, synths, vocals, or style tags.
+      - Keep it under 490 characters.
       
       The output must be valid JSON in the following format:
       {
-        "title1": "Innovative Title 1",
-        "title2": "Innovative Title 2",
-        "lyric_prompt": "Merged description of mood and style... under 490 chars"
+        "title1": "Mood-language Title 1",
+        "title2": "Mood-language Title 2",
+        "lyric_prompt": "Lyric story/theme based only on the mood... under 490 chars"
       }
       Do not include any markdown formatting or explanations, just the JSON object.
     `
@@ -86,7 +91,7 @@ export const kie = {
                     try {
                         response = await $fetch<any>(endpoint, {
                             method: 'POST',
-                            headers: getHeaders(),
+                            headers: getHeaders(apiKey),
                             body: payload
                         })
 
@@ -137,7 +142,7 @@ export const kie = {
     },
 
     // Lyrics - Using Kie Lyrics API (async)
-    async generateLyrics(prompt: string, callBackUrl: string = 'https://google.com') {
+    async generateLyrics(prompt: string, callBackUrl: string = 'https://google.com', apiKey?: string) {
         try {
             const endpoint = `${KIE_BASE_URL}/api/v1/lyrics`
 
@@ -155,7 +160,7 @@ export const kie = {
                 try {
                     response = await $fetch<any>(endpoint, {
                         method: 'POST',
-                        headers: getHeaders(),
+                        headers: getHeaders(apiKey),
                         body: payload
                     })
 
@@ -184,11 +189,11 @@ export const kie = {
         }
     },
 
-    async getLyricsTask(taskId: string) {
+    async getLyricsTask(taskId: string, apiKey?: string) {
         try {
             const response = await $fetch<any>(`${KIE_BASE_URL}/api/v1/lyrics/record-info`, {
                 method: 'GET',
-                headers: getHeaders(),
+                headers: getHeaders(apiKey),
                 query: { taskId }
             })
             // console.log(`[Kie] Lyrics Task Info for ${taskId}:`, JSON.stringify(response, null, 2))
@@ -200,7 +205,7 @@ export const kie = {
     },
 
     // Suno Music
-    async generateMusic(payload: { prompt: string; tags?: string; mv?: string; title?: string; weirdness?: number; bpm?: number; styleInfluence?: number; callbackUrl?: string, customMode?: boolean, vocalGender?: string, instrumental?: boolean, negativeTags?: string }) {
+    async generateMusic(payload: { prompt: string; tags?: string; mv?: string; title?: string; weirdness?: number; bpm?: number; styleInfluence?: number; callbackUrl?: string, customMode?: boolean, vocalGender?: string, instrumental?: boolean, negativeTags?: string }, apiKey?: string) {
         try {
             // Endpoint: /api/v1/generate
             // Mapping internal 'tags' to API 'style'.
@@ -242,7 +247,7 @@ export const kie = {
                 try {
                     response = await $fetch<any>(`${KIE_BASE_URL}/api/v1/generate`, {
                         method: 'POST',
-                        headers: getHeaders(),
+                        headers: getHeaders(apiKey),
                         body: apiPayload
                     })
 
@@ -272,7 +277,7 @@ export const kie = {
     },
 
     // Task Info / Status
-    async getTaskInfo(taskId: string) {
+    async getTaskInfo(taskId: string, apiKey?: string) {
         try {
             // Endpoint: /api/v1/generate/record-info ?
             // Need to verify this one. The previous code had /suno-api/...
@@ -284,7 +289,7 @@ export const kie = {
 
             const response = await $fetch<any>(`${KIE_BASE_URL}/api/v1/generate/record-info`, {
                 method: 'GET',
-                headers: getHeaders(),
+                headers: getHeaders(apiKey),
                 query: { taskId }
             })
             console.log(`[Kie] Task Info for ${taskId}:`, JSON.stringify(response, null, 2))
@@ -296,7 +301,7 @@ export const kie = {
     },
 
     // WAV Conversion
-    async generateWav(taskId: string, audioId: string, callBackUrl: string = 'https://google.com') {
+    async generateWav(taskId: string, audioId: string, callBackUrl: string = 'https://google.com', apiKey?: string) {
         try {
             const endpoint = `${KIE_BASE_URL}/api/v1/wav/generate`
 
@@ -315,7 +320,7 @@ export const kie = {
                 try {
                     response = await $fetch<any>(endpoint, {
                         method: 'POST',
-                        headers: getHeaders(),
+                        headers: getHeaders(apiKey),
                         body: payload
                     })
 
@@ -349,11 +354,11 @@ export const kie = {
         }
     },
 
-    async getWavTask(taskId: string) {
+    async getWavTask(taskId: string, apiKey?: string) {
         try {
             const response = await $fetch<any>(`${KIE_BASE_URL}/api/v1/wav/record-info`, {
                 method: 'GET',
-                headers: getHeaders(),
+                headers: getHeaders(apiKey),
                 query: { taskId }
             })
             return response.data

@@ -5,6 +5,16 @@ import { downloadManager } from './downloader'
 import { kie } from './kie'
 import { useDB } from './db'
 
+const buildLyricsPrompt = (mood: string, lyricBrief: string) => {
+    const base = (mood || lyricBrief || '').replace(/\s+/g, ' ').trim()
+    const brief = (lyricBrief || '').replace(/\s+/g, ' ').trim()
+    const prompt = brief && !base.includes(brief)
+        ? `${base}. ${brief}`
+        : base
+
+    return prompt.substring(0, 200)
+}
+
 export const processGeneration = async (id: number) => {
     const db = useDB()
     const row = db.prepare('SELECT * FROM generations WHERE id = ?').get(id) as any
@@ -21,6 +31,7 @@ export const processGeneration = async (id: number) => {
     settingsRows.forEach(r => settings[r.key] = r.value)
 
     const outputFolder = settings.outputFolder || 'C:\\MusicOutput' // Default
+    const kieApiKey = settings.kieApiKey
 
     // Resolve Workflow Name for subfolder
     const workflowRow = db.prepare('SELECT name FROM workflows WHERE id = ?').get(row.workflow_id) as any
@@ -58,7 +69,7 @@ export const processGeneration = async (id: number) => {
         // Ensure kie is available
         if (!kie || !kie.generateSongList) throw new Error('Kie utility not found')
 
-        const songs = await kie.generateSongList(row.mood, row.style_prompt || '', 2, previousTitles, !!row.is_instrumental)
+        const songs = await kie.generateSongList(row.mood, row.style_prompt || '', 2, previousTitles, !!row.is_instrumental, kieApiKey)
         console.log('[Processor] Gemini Response:', songs)
 
         // Determine next status based on Instrument switch
@@ -92,9 +103,9 @@ export const processGeneration = async (id: number) => {
         if (!row.lyrics_task_id) {
             // Parse the prompt from Gemini
             const prompts = JSON.parse(row.lyric_prompt || '{}')
-            const descriptionPrompt = (prompts.p1 || row.mood || '').substring(0, 200)
+            const descriptionPrompt = buildLyricsPrompt(row.mood || '', prompts.p1 || '')
 
-            const lyricsTask = await kie.generateLyrics(descriptionPrompt)
+            const lyricsTask = await kie.generateLyrics(descriptionPrompt, 'https://google.com', kieApiKey)
             console.log('[Processor] Lyrics Task Response:', lyricsTask)
 
             if (lyricsTask && lyricsTask.taskId) {
@@ -145,7 +156,7 @@ export const processGeneration = async (id: number) => {
                 negativeTags: row.negative_tags ? row.negative_tags.substring(0, 200) : ''
             }
 
-            const task = await kie.generateMusic(taskPayload)
+            const task = await kie.generateMusic(taskPayload, kieApiKey)
             console.log('[Processor] Suno Task Response:', task)
 
             if (task && task.taskId) {

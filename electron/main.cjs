@@ -51,7 +51,7 @@ async function createWindow() {
     <html>
       <body style="font-family: sans-serif; display: flex; justify-content: center; align-items: center; height: 100vh; background: #e2e8f0; color: #334155;">
         <div style="text-align: center;">
-          <h2>Starting Auto-Playlist Engine...</h2>
+          <h2>Starting TrackTunnel Engine...</h2>
           <p>Please wait while the server initializes.</p>
         </div>
       </body>

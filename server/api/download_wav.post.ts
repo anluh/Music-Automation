@@ -38,16 +38,19 @@ export default defineEventHandler(async (event) => {
         const db = useDB()
 
         // Find task ID from DB 
-        const genRow = db.prepare('SELECT suno_task_id FROM generations WHERE id = ?').get(genId) as any
+        const genRow = db.prepare('SELECT suno_task_id, workflow_id FROM generations WHERE id = ?').get(genId) as any
 
         if (!genRow || !genRow.suno_task_id) {
             return { status: 'error', message: 'Task ID not found for this generation' }
         }
 
         const taskId = genRow.suno_task_id
+        const effectiveWorkflowId = genRow.workflow_id || workflowId || 1
+        const apiKeyRow = db.prepare("SELECT value FROM settings WHERE key = 'kieApiKey' AND workflow_id = ?").get(effectiveWorkflowId) as any
+        const kieApiKey = apiKeyRow?.value || undefined
 
         // Fetch task info to find the correct audioId
-        const taskInfo = await kie.getTaskInfo(taskId)
+        const taskInfo = await kie.getTaskInfo(taskId, kieApiKey)
         let audioId = ''
 
         if (taskInfo && taskInfo.response) {
@@ -69,7 +72,7 @@ export default defineEventHandler(async (event) => {
         // 1. Request WAV conversion
         let wavTaskId = ''
         try {
-            const wavRes = await kie.generateWav(taskId, audioId)
+            const wavRes = await kie.generateWav(taskId, audioId, 'https://google.com', kieApiKey)
             if (wavRes && wavRes.taskId) {
                 wavTaskId = wavRes.taskId
             } else {
@@ -91,7 +94,7 @@ export default defineEventHandler(async (event) => {
             await new Promise(r => setTimeout(r, 2000))
             try {
                 // Poll the NEW wav task ID, not the original music generation one
-                const info = await kie.getWavTask(wavTaskId)
+                const info = await kie.getWavTask(wavTaskId, kieApiKey)
                 if (info) {
                     const statusVal = info.successFlag || info.status || ''
                     if (statusVal === 'SUCCESS') {
@@ -114,8 +117,8 @@ export default defineEventHandler(async (event) => {
 
         let maxSongs = 20
 
-        if (workflowId) {
-            const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize' AND workflow_id = ?").get(workflowId) as any
+        if (effectiveWorkflowId) {
+            const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize' AND workflow_id = ?").get(effectiveWorkflowId) as any
             if (settingsRow) maxSongs = parseInt(settingsRow.value)
         } else {
             const settingsRow = db.prepare("SELECT value FROM settings WHERE key = 'playlistSize'").get() as any

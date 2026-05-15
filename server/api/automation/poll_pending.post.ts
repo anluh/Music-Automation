@@ -1,5 +1,11 @@
 import { createGenerations } from '../../utils/generator'
 import { processGeneration } from '../../utils/processor'
+import { kie } from '../../utils/kie'
+
+const getWorkflowKieApiKey = (db: any, workflowId: number) => {
+    const row = db.prepare("SELECT value FROM settings WHERE key = 'kieApiKey' AND workflow_id = ?").get(workflowId) as any
+    return row?.value || undefined
+}
 
 export default defineEventHandler(async (event) => {
     try {
@@ -48,7 +54,7 @@ export default defineEventHandler(async (event) => {
 
         // --- POLLER START (PENDING_LYRICS check) ---
         const pendingLyricsRows = db.prepare(`
-            SELECT g.id, g.lyrics_task_id, g.lyric_prompt
+            SELECT g.id, g.workflow_id, g.lyrics_task_id, g.lyric_prompt
             FROM generations g
             WHERE g.status = 'PENDING_LYRICS' 
               AND g.lyrics_task_id IS NOT NULL
@@ -58,7 +64,7 @@ export default defineEventHandler(async (event) => {
             console.log(`[Poll Pending] Checking ${pendingLyricsRows.length} pending Lyrics tasks...`)
             await Promise.all(pendingLyricsRows.map(async (row) => {
                 try {
-                    const info = await kie.getLyricsTask(row.lyrics_task_id)
+                    const info = await kie.getLyricsTask(row.lyrics_task_id, getWorkflowKieApiKey(db, row.workflow_id))
                     // Check if success
                     if (info && (info.status === 'SUCCESS' || info.status === 'COMPLETED' || info.progress === 100)) {
                         // Parse the prompt JSON
@@ -116,7 +122,7 @@ export default defineEventHandler(async (event) => {
         // 2. Poll Kie/Suno for each in parallel
         const results = await Promise.all(pendingRows.map(async (row) => {
             try {
-                const info = await kie.getTaskInfo(row.suno_task_id)
+                const info = await kie.getTaskInfo(row.suno_task_id, getWorkflowKieApiKey(db, row.workflow_id))
 
                 if (info && (info.status === 'SUCCESS' || info.progress === 100)) {
                     const clips = info.response?.sunoData || info.sunoData || info.clips || []

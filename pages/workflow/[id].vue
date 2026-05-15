@@ -8,6 +8,14 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription, CardFooter }
 import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+    Dialog,
+    DialogContent,
+    DialogDescription,
+    DialogFooter,
+    DialogHeader,
+    DialogTitle,
+} from '@/components/ui/dialog'
 import StyleTagsModal from '@/components/StyleTagsModal.vue'
 import ConfirmModal from '@/components/ConfirmModal.vue'
 
@@ -61,6 +69,10 @@ const outputFolder = ref('C:\\MusicOutput')
 const autoDownload = ref(false)
 const vocalGender = ref([50])
 const isInstrumental = ref(false)
+const workflowApiKey = ref('')
+const showWorkflowSettings = ref(false)
+const isSavingWorkflowSettings = ref(false)
+const workflowSettingsStatus = ref('')
 
 const { data: generations, refresh, error } = await useFetch('/api/automation', {
   query: { workflowId },
@@ -211,6 +223,7 @@ onMounted(async () => {
         if (d.isInstrumental) isInstrumental.value = d.isInstrumental === 'true'
         if (d.lastMood) mood.value = d.lastMood
         if (d.negativeTags) negativeTags.value = d.negativeTags
+        if (d.kieApiKey) workflowApiKey.value = d.kieApiKey
     } catch (e) {
         console.error('Failed to load settings', e)
     }
@@ -227,6 +240,34 @@ onMounted(async () => {
 
 const toggleWorkflowAutorun = async () => {
   await toggleWorkflow(workflowId.value)
+}
+
+const openWorkflowSettings = () => {
+    workflowSettingsStatus.value = ''
+    showWorkflowSettings.value = true
+}
+
+const saveWorkflowSettings = async () => {
+    isSavingWorkflowSettings.value = true
+    workflowSettingsStatus.value = ''
+
+    try {
+        await $fetch('/api/settings', {
+            method: 'POST',
+            body: {
+                key: 'kieApiKey',
+                value: workflowApiKey.value.trim(),
+                workflowId: workflowId.value
+            }
+        })
+        workflowSettingsStatus.value = 'Saved'
+        showWorkflowSettings.value = false
+    } catch (e) {
+        console.error('Failed to save workflow settings', e)
+        workflowSettingsStatus.value = 'Failed to save'
+    } finally {
+        isSavingWorkflowSettings.value = false
+    }
 }
 
 // Auto-save tags on any change
@@ -649,21 +690,38 @@ onUnmounted(() => {
     
     <!-- 1. Header Section -->
     <header class="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-6 border-b border-primary/10">
-        <div>
-            <div @click="navigateTo('/')" class="cursor-pointer group flex items-baseline gap-3 transition-all duration-300 hover:drop-shadow-[0_0_15px_rgba(139,92,246,0.5)]">
-                <img src="/logo.png" alt="Logo" class="h-10 w-10 object-contain self-end mb-1 mr-2" />
-                <h1 class="text-4xl md:text-5xl font-extrabold tracking-tighter self-end">
-                    <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track</span>
-                    <span class="text-foreground">Tunnel</span>
-                </h1>
-                <span v-if="workflowName" class="text-2xl md:text-3xl font-bold text-indigo-400/80 tracking-tight">/ {{ workflowName }}</span>
+        <div class="space-y-1">
+            <div
+                @click="navigateTo('/')"
+                title="Back to workflows"
+                class="cursor-pointer group inline-flex items-center gap-3 rounded-2xl -ml-3 px-3 py-2 transition-all duration-300 hover:bg-white/5 hover:shadow-lg hover:shadow-indigo-500/10"
+            >
+                <img src="/logo.png" alt="TrackTunnel Logo" class="h-16 w-16 object-contain shrink-0" />
+                <div class="flex items-center gap-3 min-w-0">
+                    <div class="flex items-center gap-2">
+                        <h1 class="text-4xl md:text-5xl font-extrabold tracking-tighter">
+                            <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track</span><span class="text-foreground">Tunnel</span>
+                        </h1>
+                    </div>
+                    <span v-if="workflowName" class="text-2xl md:text-3xl font-bold text-indigo-400/80 tracking-tight truncate">/ {{ workflowName }}</span>
+                </div>
+                <svg xmlns="http://www.w3.org/2000/svg" class="h-5 w-5 text-indigo-300/60 opacity-0 -translate-x-1 transition-all duration-300 group-hover:opacity-100 group-hover:translate-x-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M19 12H5"/>
+                    <path d="m12 19-7-7 7-7"/>
+                </svg>
             </div>
-            <p class="text-muted-foreground mt-1 text-sm font-medium tracking-wide">
+            <p class="text-muted-foreground text-sm font-medium tracking-wide pl-1">
                 AI Music Automation Suite 
             </p>
         </div>
         
         <div class="flex items-center gap-3">
+             <Button variant="ghost" size="icon" @click="openWorkflowSettings" title="Workflow Settings" class="hover:bg-primary/20 transition-colors">
+                 <svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <circle cx="12" cy="12" r="3"/>
+                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09a1.65 1.65 0 0 0-1-1.51 1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.6 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 8.92 4a1.65 1.65 0 0 0 1-1.51V2a2 2 0 0 1 4 0v.09A1.65 1.65 0 0 0 15 3.6a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9c.14.31.24.64.29.98H21a2 2 0 0 1 0 4h-1.31c-.05.34-.15.67-.29.98Z"/>
+                 </svg>
+             </Button>
              <Button variant="secondary" size="sm" @click="downloadAll" :disabled="autoDownload || !generations || generations.length === 0" class="hover:bg-primary/20 transition-colors">
                  Download All
              </Button>
@@ -684,6 +742,43 @@ onUnmounted(() => {
         variant="destructive"
         @confirm="confirmDelete" 
     />
+
+    <Dialog v-model:open="showWorkflowSettings">
+        <DialogContent class="sm:max-w-[460px] border-white/10 bg-card">
+            <DialogHeader>
+                <DialogTitle>Workflow Settings</DialogTitle>
+                <DialogDescription>
+                    Configure credentials used only by this workflow.
+                </DialogDescription>
+            </DialogHeader>
+
+            <div class="space-y-2">
+                <Label for="workflow-kie-api-key" class="text-xs font-semibold uppercase tracking-wider text-muted-foreground">Kie.ai API Key</Label>
+                <Input
+                    id="workflow-kie-api-key"
+                    v-model="workflowApiKey"
+                    type="password"
+                    placeholder="Leave empty to use the default environment key"
+                    autocomplete="off"
+                    class="bg-background/50 border-white/10 font-mono text-xs"
+                    @keyup.enter="saveWorkflowSettings"
+                />
+                <p class="text-xs text-muted-foreground">
+                    This key is saved for {{ workflowName || 'this workflow' }} and will be used for Gemini, lyrics, music, polling, and WAV conversion.
+                </p>
+                <p v-if="workflowSettingsStatus" class="text-xs" :class="workflowSettingsStatus === 'Saved' ? 'text-emerald-400' : 'text-destructive'">
+                    {{ workflowSettingsStatus }}
+                </p>
+            </div>
+
+            <DialogFooter>
+                <Button variant="outline" @click="showWorkflowSettings = false">Cancel</Button>
+                <Button @click="saveWorkflowSettings" :disabled="isSavingWorkflowSettings">
+                    {{ isSavingWorkflowSettings ? 'Saving...' : 'Save Settings' }}
+                </Button>
+            </DialogFooter>
+        </DialogContent>
+    </Dialog>
 
     <!-- 2. Control Panel -->
     <section>
