@@ -1,5 +1,6 @@
 import { join } from 'node:path'
 import { writeFileSync, existsSync, copyFileSync } from 'node:fs'
+import { closeDB } from '../../utils/db'
 
 export default defineEventHandler(async (event) => {
     try {
@@ -28,9 +29,9 @@ export default defineEventHandler(async (event) => {
 
         // 2. Overwrite
         // Note: active connections might throw locking errors. 
-        // In WAL mode usually fine, but ideally we'd close the DB first.
-        // For this simple app, we try direct write. 
-        // If it fails (due to locks), the user might need to restart app.
+        // We close the DB to release locks and force recreation with migrations.
+        closeDB()
+
         writeFileSync(dbPath, file.data)
 
         return { success: true, message: 'Database imported successfully. Please restart the app.' }

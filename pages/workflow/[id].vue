@@ -68,15 +68,26 @@ const { data: generations, refresh, error } = await useFetch('/api/automation', 
 })
 
 const showArchives = ref(false)
+const searchQuery = ref('')
+
+const filterBySearch = (g: any) => {
+    if (!searchQuery.value) return true;
+    const q = searchQuery.value.toLowerCase();
+    const s1 = (g.song_name_1 || '').toLowerCase();
+    const s2 = (g.song_name_2 || '').toLowerCase();
+    const l1 = (g.lyric_prompt || '').toLowerCase();
+    const l2 = (g.lyrics_content || '').toLowerCase();
+    return s1.includes(q) || s2.includes(q) || l1.includes(q) || l2.includes(q);
+}
 
 const activeGenerations = computed(() => {
     if (!generations.value) return []
-    return generations.value.filter((g: any) => !g.archived_at)
+    return generations.value.filter((g: any) => !g.archived_at && filterBySearch(g))
 })
 
 const archivedGroups = computed(() => {
     if (!generations.value) return []
-    const archived = generations.value.filter((g: any) => g.archived_at)
+    const archived = generations.value.filter((g: any) => g.archived_at && filterBySearch(g))
     
     // Group by exact archived_at timestamp
     const groups: Record<string, any[]> = {}
@@ -94,6 +105,14 @@ const archivedGroups = computed(() => {
             items, 
             expanded: expandedArchiveKeys.value.has(date) 
         }))
+})
+
+const totalSearchResults = computed(() => {
+    let count = activeGenerations.value.length;
+    archivedGroups.value.forEach(group => {
+        count += group.items.length;
+    });
+    return count;
 })
 
 // Track expanded states persistently by date key
@@ -803,12 +822,25 @@ onUnmounted(() => {
         <div class="flex items-center justify-between px-2">
             <h2 class="text-lg font-semibold text-muted-foreground">Recent Generations</h2>
             <div class="flex items-center gap-3">
-                 <div v-if="archivedGroups.length > 0" class="flex items-center gap-2">
+                 <div v-if="archivedGroups.length > 0 || (searchQuery && showArchives)" class="flex items-center gap-2">
                     <Button variant="ghost" size="sm" @click="showArchives = !showArchives" class="h-6 text-xs text-muted-foreground px-2">
-                        {{ showArchives ? 'Hide Archives' : `Show Archives (${archivedGroups.length})` }}
+                        {{ showArchives ? 'Hide Archives' : `Show Archives` }}
                     </Button>
                 </div>
                 <Badge variant="outline" class="font-mono text-[10px]">{{ activeGenerations.length }} Items</Badge>
+            </div>
+        </div>
+
+        <div class="px-2 mb-3">
+            <div class="relative flex items-center group">
+                <Input v-model="searchQuery" placeholder="Search tracks by name or lyrics..." 
+                    class="w-full bg-background/50 border-white/10 transition-all focus:border-indigo-500/50 hover:border-white/20 shadow-inner pr-24 h-10" />
+                <div class="absolute right-2 flex items-center justify-center transition-all duration-300" 
+                     :class="searchQuery ? 'opacity-100 scale-100' : 'opacity-0 scale-95 pointer-events-none'">
+                    <Badge variant="outline" class="text-[10px] font-mono bg-indigo-500/10 text-indigo-300 border-indigo-500/20 px-2 min-w-[75px] justify-center text-center">
+                        {{ totalSearchResults }} found
+                    </Badge>
+                </div>
             </div>
         </div>
 

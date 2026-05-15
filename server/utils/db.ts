@@ -4,6 +4,17 @@ import { join } from 'node:path'
 
 let db: any = null
 
+export const closeDB = () => {
+    if (db) {
+        try {
+            db.close()
+        } catch (e) {
+            console.error('[DB] Error closing DB:', e)
+        }
+        db = null
+    }
+}
+
 export const useDB = () => {
   if (db) return db
 
