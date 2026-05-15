@@ -9,11 +9,13 @@ import { Badge } from '@/components/ui/badge'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import StyleTagsModal from '@/components/StyleTagsModal.vue'
+import ConfirmModal from '@/components/ConfirmModal.vue'
 
 const mood = ref('')
 // const stylePrompt = ref('') // Deprecated in favor of tags
 const styleTags = ref<{ id: string, text: string, active: boolean }[]>([])
 const showStyleModal = ref(false)
+const negativeTags = ref('')
 
 // Composable
 const { init, getWorkflowState, toggleWorkflow, refreshWorkflows } = useWorkflows()
@@ -188,6 +190,8 @@ onMounted(async () => {
         }
         if (d.vocalGender) vocalGender.value = JSON.parse(d.vocalGender)
         if (d.isInstrumental) isInstrumental.value = d.isInstrumental === 'true'
+        if (d.lastMood) mood.value = d.lastMood
+        if (d.negativeTags) negativeTags.value = d.negativeTags
     } catch (e) {
         console.error('Failed to load settings', e)
     }
@@ -207,12 +211,14 @@ const toggleWorkflowAutorun = async () => {
 }
 
 // Auto-save tags on any change
-watch([styleTags, outputFolder, playlistSize, songCount, autoDownload, vocalGender, isInstrumental], () => {
+watch([styleTags, outputFolder, playlistSize, songCount, autoDownload, vocalGender, isInstrumental, negativeTags], () => {
     saveSettings()
 }, { deep: true })
 
 const saveSettings = async () => {
     const settingsToSave = {
+        lastMood: mood.value,
+        negativeTags: negativeTags.value,
         stylePrompt: activeStylePrompt.value, // Save string for legacy/backend compatibility
         styleTags: JSON.stringify(styleTags.value),
         weirdnessRange: JSON.stringify(weirdnessRange.value),
@@ -245,6 +251,7 @@ const startAutomation = async () => {
         mood: mood.value, 
         stylePrompt: activeStylePrompt.value,
         tags: styleTags.value.filter(t => t.active).map(t => t.text),
+        negativeTags: negativeTags.value,
         weirdnessMin: weirdnessRange.value[0],
         weirdnessMax: weirdnessRange.value[1],
         bpmMin: bpmRange.value[0],
@@ -258,7 +265,7 @@ const startAutomation = async () => {
         workflowId: workflowId.value
       }
     })
-    mood.value = ''
+    // mood.value = ''
     await saveSettings()
     refresh()
   } catch (e) {
@@ -305,6 +312,36 @@ const downloadTrack = async (url: string, name: string, targetFolder: string, av
     } catch (e: any) {
         console.error(`[Download] Failed ${name}`, e)
         throw e
+    }
+}
+
+const processingWavIds = ref<Set<string>>(new Set())
+
+const downloadWavTrack = async (url: string, name: string, genId: number, trackNum: number) => {
+    if (!url) return
+    const idKey = `${genId}_${trackNum}`
+    if (processingWavIds.value.has(idKey)) return
+
+    try {
+        processingWavIds.value.add(idKey)
+        console.log(`[WAV Download] Triggered manually for ${name}...`)
+        
+        await $fetch('/api/download_wav', {
+            method: 'POST',
+            body: { 
+                url, 
+                filename: name, 
+                workflowId: workflowId.value,
+                genId
+            }
+        })
+        
+        console.log(`[WAV Download] Success: ${name}`)
+    } catch (e: any) {
+        console.error(`[WAV Download] Failed ${name}`, e)
+        alert(`Failed to download WAV for ${name}: ${e.message}`)
+    } finally {
+        processingWavIds.value.delete(idKey)
     }
 }
 
@@ -528,9 +565,11 @@ const downloadAll = async () => {
 }
 
 
+const showDeleteModal = ref(false)
+
 const deleteRow = (id: number) => {
     deletingId.value = id
-    activeModalType.value = 'delete'
+    showDeleteModal.value = true
 }
 
 const confirmDelete = async () => {
@@ -593,6 +632,7 @@ onUnmounted(() => {
     <header class="flex flex-col md:flex-row justify-between items-end md:items-center gap-4 pb-6 border-b border-primary/10">
         <div>
             <div @click="navigateTo('/')" class="cursor-pointer group flex items-baseline gap-3 transition-all duration-300 hover:drop-shadow-[0_0_15px_rgba(139,92,246,0.5)]">
+                <img src="/logo.png" alt="Logo" class="h-10 w-10 object-contain self-end mb-1 mr-2" />
                 <h1 class="text-4xl md:text-5xl font-extrabold tracking-tighter self-end">
                     <span class="bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track</span>
                     <span class="text-foreground">Tunnel</span>
@@ -617,6 +657,14 @@ onUnmounted(() => {
              </Button>
         </div>
     </header>
+
+    <ConfirmModal 
+        v-model:open="showDeleteModal" 
+        title="Delete Selection?" 
+        description="Are you sure you want to delete this item? The file will be removed from the list." 
+        variant="destructive"
+        @confirm="confirmDelete" 
+    />
 
     <!-- 2. Control Panel -->
     <section>
@@ -680,6 +728,11 @@ onUnmounted(() => {
                                     <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M17 3a2.828 2.828 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5L17 3z"/></svg>
                                  </div>
                             </div>
+                        </div>
+
+                        <div class="space-y-1">
+                            <Input v-model="negativeTags" placeholder="Negative Tags (e.g. low quality, male vocals)" maxlength="200"
+                                class="h-10 text-xs bg-background/50 border-white/10 focus:border-red-500/50 transition-all shadow-inner text-muted-foreground placeholder:text-muted-foreground/50" />
                         </div>
 
                         <!-- Vocal Settings -->
@@ -792,9 +845,38 @@ onUnmounted(() => {
                                  <Button v-if="gen.created_at && isDownloadable(gen.created_at)" 
                                          size="icon" variant="ghost" class="h-6 w-6 text-muted-foreground hover:text-foreground"
                                          @click.stop="downloadArchivedTrack(gen)"
-                                         :disabled="processingRowIds.has(gen.id)">
+                                         :disabled="processingRowIds.has(gen.id)"
+                                         title="Download MP3">
                                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
                                  </Button>
+                                 
+                                 <!-- Archive WAV Download Stack -->
+                                 <div class="flex flex-col gap-[2px] ml-1" v-if="gen.audio_url_1 || gen.audio_url_2">
+                                     <Button 
+                                         v-if="gen.audio_url_1"
+                                         size="sm" 
+                                         variant="outline" 
+                                         class="h-5 px-1.5 text-[9px] font-mono tracking-wider opacity-70 hover:opacity-100 border-indigo-500/30 hover:border-indigo-400 hover:text-indigo-400 transition-colors"
+                                         @click.stop="downloadWavTrack(gen.audio_url_1, gen.song_name_1 || 'track1', gen.id, 1)"
+                                         :disabled="processingWavIds.has(`${gen.id}_1`)"
+                                         title="Download WAV 1"
+                                     >
+                                         <span v-if="processingWavIds.has(`${gen.id}_1`)" class="animate-pulse">WAV...</span>
+                                         <span v-else>WAV 1</span>
+                                     </Button>
+                                     <Button 
+                                         v-if="gen.audio_url_2"
+                                         size="sm" 
+                                         variant="outline" 
+                                         class="h-5 px-1.5 text-[9px] font-mono tracking-wider opacity-70 hover:opacity-100 border-purple-500/30 hover:border-purple-400 hover:text-purple-400 transition-colors"
+                                         @click.stop="downloadWavTrack(gen.audio_url_2, gen.song_name_2 || 'track2', gen.id, 2)"
+                                         :disabled="processingWavIds.has(`${gen.id}_2`)"
+                                         title="Download WAV 2"
+                                     >
+                                         <span v-if="processingWavIds.has(`${gen.id}_2`)" class="animate-pulse">WAV...</span>
+                                         <span v-else>WAV 2</span>
+                                     </Button>
+                                 </div>
                              </div>
                         </div>
                     </template>
@@ -965,8 +1047,36 @@ onUnmounted(() => {
                                     </svg>
                                  </Button>
                                  
+                                 <!-- WAV Download Stack -->
+                                 <div class="flex flex-col gap-1 ml-1" v-if="gen.audio_url_1 || gen.audio_url_2">
+                                     <Button 
+                                         v-if="gen.audio_url_1"
+                                         size="sm" 
+                                         variant="outline" 
+                                         class="h-6 px-2 text-[10px] font-mono tracking-wider opacity-70 hover:opacity-100 border-indigo-500/30 hover:border-indigo-400 hover:text-indigo-400 transition-colors"
+                                         @click.stop="downloadWavTrack(gen.audio_url_1, gen.song_name_1 || 'track1', gen.id, 1)"
+                                         :disabled="processingWavIds.has(`${gen.id}_1`)"
+                                         title="Download WAV 1"
+                                     >
+                                         <span v-if="processingWavIds.has(`${gen.id}_1`)" class="animate-pulse">WAV...</span>
+                                         <span v-else>WAV 1</span>
+                                     </Button>
+                                     <Button 
+                                         v-if="gen.audio_url_2"
+                                         size="sm" 
+                                         variant="outline" 
+                                         class="h-6 px-2 text-[10px] font-mono tracking-wider opacity-70 hover:opacity-100 border-purple-500/30 hover:border-purple-400 hover:text-purple-400 transition-colors"
+                                         @click.stop="downloadWavTrack(gen.audio_url_2, gen.song_name_2 || 'track2', gen.id, 2)"
+                                         :disabled="processingWavIds.has(`${gen.id}_2`)"
+                                         title="Download WAV 2"
+                                     >
+                                         <span v-if="processingWavIds.has(`${gen.id}_2`)" class="animate-pulse">WAV...</span>
+                                         <span v-else>WAV 2</span>
+                                     </Button>
+                                 </div>
+
                                  <!-- Delete -->
-                                 <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive hover:bg-destructive/10" @click.stop="deleteRow(gen.id)">
+                                 <Button variant="ghost" size="icon" class="h-8 w-8 text-destructive hover:bg-destructive/10 border-l border-white/5 pl-2 ml-1" @click.stop="deleteRow(gen.id)">
                                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/></svg>
                                  </Button>
                             </div>

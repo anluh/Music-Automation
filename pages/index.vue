@@ -6,9 +6,15 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import Switch from '@/components/ui/switch/Switch.vue'
 
+import ConfirmModal from '@/components/ConfirmModal.vue'
+
 const { workflows, refreshWorkflows, toggleWorkflow, init } = useWorkflows()
 const newWorkflowName = ref('')
 const isLoading = ref(false)
+
+// Delete Modal State
+const showDeleteModal = ref(false)
+const workflowToDelete = ref<number | null>(null)
 
 const createWorkflow = async () => {
     if (!newWorkflowName.value) return
@@ -30,16 +36,51 @@ const createWorkflow = async () => {
     }
 }
 
-const deleteWorkflow = async (id: number) => {
-    if (!confirm('Are you sure? This will delete all generations and settings for this workflow.')) return
+const requestDelete = (id: number) => {
+    workflowToDelete.value = id
+    showDeleteModal.value = true
+}
+
+const confirmDelete = async () => {
+    if (!workflowToDelete.value) return
     try {
         await $fetch('/api/workflows/delete', {
             method: 'POST',
-            body: { id }
+            body: { id: workflowToDelete.value }
         })
         refreshWorkflows()
     } catch (e) {
         console.error('Failed to delete', e)
+    } finally {
+        workflowToDelete.value = null
+    }
+}
+
+const exportDB = async () => {
+    window.open('/api/database/export', '_blank')
+}
+
+const importDB = async (e: any) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    const formData = new FormData()
+    formData.append('file', file)
+
+    try {
+        const res = await $fetch('/api/database/import', {
+            method: 'POST',
+            body: formData
+        }) as any
+        
+        if (res.success) {
+            alert('Database imported. The app will now reload.')
+            location.reload()
+        } else {
+            alert('Import failed: ' + res.message)
+        }
+    } catch (err: any) {
+        alert('Upload error: ' + err.message)
     }
 }
 
@@ -55,7 +96,10 @@ onMounted(() => {
 <template>
 <div class="container mx-auto p-10 max-w-5xl space-y-10">
     <header class="text-center space-y-4">
-        <h1 class="text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track Tunnel</h1>
+        <div class="flex flex-col items-center justify-center gap-4">
+            <img src="/logo.png" alt="Track Tunnel Logo" class="h-24 w-24 object-contain drop-shadow-[0_0_15px_rgba(139,92,246,0.3)]" />
+            <h1 class="text-5xl font-extrabold tracking-tighter bg-gradient-to-r from-indigo-400 via-purple-400 to-pink-400 bg-clip-text text-transparent">Track Tunnel</h1>
+        </div>
         <p class="text-muted-foreground text-lg">Manage your automation workflows</p>
     </header>
 
@@ -89,10 +133,34 @@ onMounted(() => {
                 </div>
             </CardContent>
             <CardFooter class="flex justify-between border-t border-white/5 pt-4 bg-black/20">
-                <Button variant="ghost" size="sm" class="text-destructive hover:text-red-400" @click.stop="deleteWorkflow(wf.id)">Delete</Button>
+                <Button variant="ghost" size="sm" class="text-destructive hover:text-red-400" @click.stop="requestDelete(wf.id)">Delete</Button>
                 <Button @click="navigateTo(`/workflow/${wf.id}`)" class="bg-indigo-600 hover:bg-indigo-500 text-white">Open</Button>
             </CardFooter>
         </Card>
     </div>
+    <!-- 3. Database Management -->
+    <Card class="border-white/5 bg-white/5 p-6 space-y-4">
+        <h3 class="text-xl font-semibold">Database Management</h3>
+        <p class="text-muted-foreground text-sm">Backup or restore your workflows and generation history.</p>
+        <div class="flex gap-4">
+            <Button variant="outline" @click="exportDB">
+                Export Database
+            </Button>
+            <div class="relative">
+                <Button variant="outline" class="cursor-pointer" @click="$refs.fileInput.click()">
+                    Import Database
+                </Button>
+                <input ref="fileInput" type="file" accept=".db" class="hidden" @change="importDB" />
+            </div>
+        </div>
+    </Card>
+
+    <ConfirmModal 
+        v-model:open="showDeleteModal" 
+        title="Delete Workflow?" 
+        description="Are you sure you want to delete this workflow? All generations and settings will be lost." 
+        variant="destructive"
+        @confirm="confirmDelete" 
+    />
 </div>
 </template>

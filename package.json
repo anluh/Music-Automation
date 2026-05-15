@@ -1,13 +1,47 @@
 {
   "name": "auto-playlist",
   "type": "module",
+  "version": "1.0.0",
+  "description": "Automated Playlist Generator",
+  "author": "User",
   "private": true,
+  "main": "electron/main.cjs",
   "scripts": {
     "build": "nuxt build",
     "dev": "nuxt dev",
     "generate": "nuxt generate",
     "preview": "nuxt preview",
-    "postinstall": "nuxt prepare"
+    "postinstall": "nuxt prepare",
+    "dev:electron": "concurrently \"nuxt dev --host 127.0.0.1 --port 3000\" \"wait-on tcp:127.0.0.1:3000 && cross-env ELECTRON_DEV_URL=http://127.0.0.1:3000 electron .\"",
+    "build:electron": "electron-builder install-app-deps && nuxt build && electron-builder",
+    "fix:bindings": "node scripts/rebuild-native.cjs"
+  },
+  "build": {
+    "appId": "com.autoplaylist.app",
+    "productName": "Auto Playlist",
+    "directories": {
+      "output": "dist_electron"
+    },
+    "files": [
+      "electron/**/*",
+      ".output/**/*",
+      "package.json"
+    ],
+    "extraResources": [
+      {
+        "from": ".output",
+        "to": ".output",
+        "filter": [
+          "**/*"
+        ]
+      },
+      ".env"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/logo.png"
+    },
+    "npmRebuild": true
   },
   "dependencies": {
     "@pinia/nuxt": "^0.11.3",
@@ -16,6 +50,10 @@
     "better-sqlite3": "^12.6.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
+    "dotenv": "^17.2.3",
+    "electron-squirrel-startup": "^1.0.1",
+    "file-uri-to-path": "^2.0.0",
+    "get-port": "^5.1.1",
     "lucide-vue-next": "^0.562.0",
     "nuxt": "^3.11.0",
     "pinia": "^3.0.4",
@@ -30,6 +68,11 @@
   },
   "devDependencies": {
     "@types/node": "^25.0.10",
-    "tailwindcss-animate": "^1.0.7"
+    "concurrently": "^9.2.1",
+    "cross-env": "^10.1.0",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.4.0",
+    "tailwindcss-animate": "^1.0.7",
+    "wait-on": "^9.0.3"
   }
 }

@@ -7,7 +7,14 @@ let db: any = null
 export const useDB = () => {
   if (db) return db
 
-  const dbDir = './.data'
+  let dbDir = './.data'
+
+  // In Electron (Production), use the User Data path passed from main process
+  if (process.env.IS_ELECTRON && process.env.USER_DATA_PATH) {
+    dbDir = process.env.USER_DATA_PATH
+    console.log('[DB] Using Electron User Data Path:', dbDir)
+  }
+
   mkdirSync(dbDir, { recursive: true })
 
   db = new Database(join(dbDir, 'automation.db'))
@@ -17,6 +24,7 @@ export const useDB = () => {
     CREATE TABLE IF NOT EXISTS workflows (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       name TEXT NOT NULL,
+      is_active INTEGER DEFAULT 0,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `)
@@ -47,6 +55,17 @@ export const useDB = () => {
     console.error('[DB] Migration failed', e)
   }
 
+  try {
+    const info3 = db.pragma('table_info(generations)') as any[]
+    if (!info3.some(col => col.name === 'negative_tags')) {
+      console.log('[DB] Migrating generations table to include negative_tags...')
+      db.prepare('ALTER TABLE generations ADD COLUMN negative_tags TEXT').run()
+      console.log('[DB] Negative Tags Migration complete.')
+    }
+  } catch (e) {
+    console.error('[DB] Negative Tags Migration failed', e)
+  }
+
   db.exec(`
     CREATE TABLE IF NOT EXISTS generations (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -72,6 +91,7 @@ export const useDB = () => {
       local_path_2 TEXT,
       vocal_gender_probability INTEGER,
       is_instrumental BOOLEAN,
+      negative_tags TEXT,
       created_at DATETIME DEFAULT CURRENT_TIMESTAMP
     )
   `)

@@ -58,7 +58,7 @@ export const processGeneration = async (id: number) => {
         // Ensure kie is available
         if (!kie || !kie.generateSongList) throw new Error('Kie utility not found')
 
-        const songs = await kie.generateSongList(row.mood, row.style_prompt || '', 2, previousTitles)
+        const songs = await kie.generateSongList(row.mood, row.style_prompt || '', 2, previousTitles, !!row.is_instrumental)
         console.log('[Processor] Gemini Response:', songs)
 
         // Determine next status based on Instrument switch
@@ -141,7 +141,8 @@ export const processGeneration = async (id: number) => {
                 styleInfluence: sVal,
                 customMode: isCustomMode, // Use Custom Mode if we have lyrics
                 vocalGender: vocalGender,
-                instrumental: !!row.is_instrumental
+                instrumental: !!row.is_instrumental,
+                negativeTags: row.negative_tags ? row.negative_tags.substring(0, 200) : ''
             }
 
             const task = await kie.generateMusic(taskPayload)

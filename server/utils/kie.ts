@@ -17,7 +17,7 @@ const getHeaders = () => {
 
 export const kie = {
     // Gemini / Chat
-    async generateSongList(mood: string, styleTags: string, count: number, excludedTitles: string[] = []) {
+    async generateSongList(mood: string, styleTags: string, count: number, excludedTitles: string[] = [], isInstrumental: boolean = false) {
         // We ask for exactly 'count' songs.
 
         let exclusionText = ''
@@ -28,20 +28,22 @@ export const kie = {
       - Do not use titles that are very similar to these.`
         }
 
+        const mergeInstruction = isInstrumental
+            ? `- MERGE the Mood ("${mood}") and Style Tags ("${styleTags}") into a cohesive, descriptive string.`
+            : `
+      - The description should be based ONLY on the mood ("${mood}").
+      - DO NOT include the specific style tags ("${styleTags}") in the description, as they are applied separately.
+      - Focus on the lyrical theme and emotional vibe.`
+
         const prompt = `
       Generate a list of 2 unique song titles and ONE short music description prompt based on the mood: "${mood}" and style tags: "${styleTags}".
       
       TITLES INSTRUCTIONS:
       - Must be innovative and BASED ON CURRENT VIRAL & US MUSIC TRENDS.
-      - Sometimes can use modern slang (Gen Z/Alpha) or well-known foreign words understood in the US.
-      - Titles should rarely be duplicated and should mirror the music description's vibe.
-      ${exclusionText}
-
-      RANDOMNESS SEED: ${Math.random()} (Use this to diverge from previous outputs)
 
       PROMPT INSTRUCTIONS:
       - Create a single "lyric_prompt" value that serves as a Suno music description.
-      - MERGE the Mood ("${mood}") and Style Tags ("${styleTags}") into a cohesive, descriptive string.
+      ${mood}
       - The description MUST be under 490 characters.
       - Focus on the vibe, instruments, pacing, and emotional tone.
       
@@ -54,71 +56,84 @@ export const kie = {
       Do not include any markdown formatting or explanations, just the JSON object.
     `
 
-        try {
-            // Using Gemini 3 Flash via Kie.ai standard endpoint
-            // Based on user request: https://kie.ai/gemini-3-flash
-            const endpoint = `${KIE_BASE_URL}/gemini-3-flash/v1/chat/completions`
+        const models = [
+            { id: 'gemini-3-flash', endpoint: `${KIE_BASE_URL}/gemini-3-flash/v1/chat/completions` },
+            { id: 'gemini-2.5-flash', endpoint: `${KIE_BASE_URL}/gemini-2.5-flash/v1/chat/completions` },
+            { id: 'gemini-1.5-flash', endpoint: `${KIE_BASE_URL}/gemini-1.5-flash/v1/chat/completions` }
+        ]
 
-            const payload = {
-                model: 'gemini-3-flash',
-                messages: [
-                    { role: 'system', content: 'You are a creative music assistant.' },
-                    { role: 'user', content: prompt }
-                ]
-            }
+        let lastError: any
 
-            console.log(`[Kie] Sending request to ${endpoint} with payload:`, JSON.stringify(payload, null, 2))
+        for (const modelConfig of models) {
+            try {
+                // Using Gemini via Kie.ai standard endpoint
+                const endpoint = modelConfig.endpoint
 
-            let response: any
-            let lastError: any
-
-            // Retry logic (3 attempts)
-            for (let attempt = 1; attempt <= 3; attempt++) {
-                try {
-                    response = await $fetch<any>(endpoint, {
-                        method: 'POST',
-                        headers: getHeaders(),
-                        body: payload
-                    })
-
-                    if (response && (response.code === 500 || response.error)) {
-                        throw new Error(response.msg || response.message || JSON.stringify(response))
-                    }
-
-                    break // Success
-                } catch (e: any) {
-                    lastError = e
-                    console.error(`[Kie] Attempt ${attempt} failed:`, e.message)
-                    if (attempt < 3) await new Promise(r => setTimeout(r, 1000)) // Wait 1s
+                const payload = {
+                    model: modelConfig.id,
+                    messages: [
+                        { role: 'system', content: 'You are a creative music assistant.' },
+                        { role: 'user', content: prompt }
+                    ]
                 }
+
+                console.log(`[Kie] Sending request to ${endpoint} (Model: ${modelConfig.id})`)
+
+                let response: any
+
+                // Retry logic (3 attempts)
+                for (let attempt = 1; attempt <= 3; attempt++) {
+                    try {
+                        response = await $fetch<any>(endpoint, {
+                            method: 'POST',
+                            headers: getHeaders(),
+                            body: payload
+                        })
+
+                        if (response && (response.code === 500 || response.error)) {
+                            throw new Error(response.msg || response.message || JSON.stringify(response))
+                        }
+
+                        // If we are here, success!
+                        break
+                    } catch (e: any) {
+                        console.warn(`[Kie] Model ${modelConfig.id} Attempt ${attempt} failed:`, e.message)
+                        if (attempt < 2) await new Promise(r => setTimeout(r, 1000))
+
+                        // If it's the last attempt for this model, rethrow to outer loop
+                        if (attempt === 2) throw e
+                    }
+                }
+
+                if (!response) throw new Error('No response received')
+
+                console.log(`[Kie] Response received from ${modelConfig.id}:`, JSON.stringify(response, null, 2))
+
+                let content = ''
+                if (response && response.choices && response.choices.length > 0) {
+                    content = response.choices[0].message.content
+                } else if (response && response.candidates && response.candidates.length > 0) {
+                    // Native Gemini format support just in case
+                    content = response.candidates[0].content.parts[0].text
+                } else {
+                    console.error('[Kie] Invalid Response Structure:', response)
+                    throw new Error(`Invalid response from Gemini API: ${JSON.stringify(response)}`)
+                }
+
+                // Clean potential markdown blocks
+                const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim()
+                return JSON.parse(cleanContent)
+
+            } catch (e: any) {
+                lastError = e
+                console.error(`[Kie] Model ${modelConfig.id} failed completely. Trying next...`)
+                continue // Try next model
             }
-
-            if (!response) {
-                console.error('[Kie] All attempts failed. Last error:', lastError)
-                throw lastError || new Error('Gemini Generation failed after 3 attempts')
-            }
-
-            console.log('[Kie] Response received:', JSON.stringify(response, null, 2))
-
-            let content = ''
-            if (response && response.choices && response.choices.length > 0) {
-                content = response.choices[0].message.content
-            } else if (response && response.candidates && response.candidates.length > 0) {
-                // Native Gemini format support just in case
-                content = response.candidates[0].content.parts[0].text
-            } else {
-                console.error('[Kie] Invalid Response Structure:', response)
-                // Throwing with JSON string to see it in frontend
-                throw new Error(`Invalid response from Gemini API: ${JSON.stringify(response)}`)
-            }
-
-            // Clean potential markdown blocks
-            const cleanContent = content.replace(/```json/g, '').replace(/```/g, '').trim()
-            return JSON.parse(cleanContent)
-        } catch (e: any) {
-            console.error('Gemini Error:', e)
-            throw createError({ statusCode: 500, statusMessage: e.message || 'Gemini Generation Failed' })
         }
+
+        // If we get here, all models failed
+        console.error('Gemini Error: All models failed.', lastError)
+        throw createError({ statusCode: 500, statusMessage: lastError?.message || 'Gemini Generation Failed after all retries' })
     },
 
     // Lyrics - Using Kie Lyrics API (async)
@@ -185,7 +200,7 @@ export const kie = {
     },
 
     // Suno Music
-    async generateMusic(payload: { prompt: string; tags?: string; mv?: string; title?: string; weirdness?: number; bpm?: number; styleInfluence?: number; callbackUrl?: string, customMode?: boolean, vocalGender?: string, instrumental?: boolean }) {
+    async generateMusic(payload: { prompt: string; tags?: string; mv?: string; title?: string; weirdness?: number; bpm?: number; styleInfluence?: number; callbackUrl?: string, customMode?: boolean, vocalGender?: string, instrumental?: boolean, negativeTags?: string }) {
         try {
             // Endpoint: /api/v1/generate
             // Mapping internal 'tags' to API 'style'.
@@ -213,7 +228,8 @@ export const kie = {
                 weirdnessConstraint: payload.weirdness ? payload.weirdness / 100 : undefined,
                 styleWeight: payload.styleInfluence ? payload.styleInfluence / 100 : undefined,
                 vocalGender: payload.vocalGender,
-                instrumental: payload.instrumental
+                instrumental: payload.instrumental,
+                negativeTags: payload.negativeTags
             }
 
             console.log('[Kie] Generating Music with payload:', apiPayload)
@@ -275,6 +291,74 @@ export const kie = {
             return response.data
         } catch (e) {
             console.error('Task Info Error:', e)
+            throw e
+        }
+    },
+
+    // WAV Conversion
+    async generateWav(taskId: string, audioId: string, callBackUrl: string = 'https://google.com') {
+        try {
+            const endpoint = `${KIE_BASE_URL}/api/v1/wav/generate`
+
+            const payload = {
+                taskId,
+                audioId,
+                callBackUrl
+            }
+
+            console.log(`[Kie] Requesting WAV conversion with payload:`, JSON.stringify(payload, null, 2))
+
+            let response: any
+            let lastError: any
+
+            for (let attempt = 1; attempt <= 3; attempt++) {
+                try {
+                    response = await $fetch<any>(endpoint, {
+                        method: 'POST',
+                        headers: getHeaders(),
+                        body: payload
+                    })
+
+                    if (response && response.code === 409) {
+                        console.log(`[Kie] WAV already exists (409). Using existing Task ID.`);
+                        break // Success
+                    }
+
+                    if (response && (response.code >= 400 || response.error)) {
+                        throw new Error(response.msg || response.message || JSON.stringify(response))
+                    }
+
+                    break // Success
+                } catch (e: any) {
+                    lastError = e
+                    console.error(`[Kie] WAV Conversion Attempt ${attempt} failed:`, e.message)
+                    if (attempt < 3) await new Promise(r => setTimeout(r, 1000))
+                }
+            }
+
+            if (!response) {
+                console.error('[Kie] All WAV conversion attempts failed. Last error:', lastError)
+                throw lastError || new Error('WAV Conversion failed after 3 attempts')
+            }
+
+            console.log('[Kie] WAV Conversion Response:', JSON.stringify(response, null, 2))
+            return response.data // Should contain { taskId: "..." }
+        } catch (e: any) {
+            console.error('WAV Conversion Error:', e)
+            throw createError({ statusCode: 500, statusMessage: e.message || 'WAV Conversion Failed' })
+        }
+    },
+
+    async getWavTask(taskId: string) {
+        try {
+            const response = await $fetch<any>(`${KIE_BASE_URL}/api/v1/wav/record-info`, {
+                method: 'GET',
+                headers: getHeaders(),
+                query: { taskId }
+            })
+            return response.data
+        } catch (e) {
+            console.error('WAV Task Info Error:', e)
             throw e
         }
     }

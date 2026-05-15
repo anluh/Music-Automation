@@ -8,6 +8,7 @@ interface DownloadOptions {
     maxSongsPerPlaylist?: number
     avoidFolders?: string[] // List of folders to avoid (e.g. for the second song of a pair)
     flatStructure?: boolean
+    isWav?: boolean
 }
 
 interface DownloadResult {
@@ -21,7 +22,7 @@ const logToFile = (msg: string) => {
     try {
         const logPath = join(process.cwd(), 'download_debug.log')
         const timestamp = new Date().toISOString()
-        const line = `[${timestamp}] ${msg}\n`
+        const line = `[${timestamp}]\ ${msg}\n`
         // Append synchronously to ensure we catch crashes
         const { appendFileSync } = require('node:fs')
         appendFileSync(logPath, line)
@@ -33,9 +34,9 @@ const logToFile = (msg: string) => {
 
 export const downloadManager = {
     /**
-     * Sanitize filename: remove dashes, special chars, ensure .mp3
+     * Sanitize filename: remove dashes, special chars, ensure correct extension
      */
-    sanitizeFilename(name: string): string {
+    sanitizeFilename(name: string, isWav: boolean = false): string {
         // Remove dashes and underscores, replace with spaces
         let cleanName = name.replace(/[-_]/g, ' ')
         // Remove other special characters (keep alphanumeric and spaces)
@@ -46,8 +47,13 @@ export const downloadManager = {
         if (!cleanName) cleanName = 'Untitled Track'
 
         // Ensure extension
-        if (!cleanName.toLowerCase().endsWith('.mp3')) {
-            cleanName += '.mp3'
+        const ext = isWav ? '.wav' : '.mp3'
+        if (!cleanName.toLowerCase().endsWith(ext)) {
+            // If it has mp3 but wants wav or vice versa, strip the old one just in case
+            if (cleanName.toLowerCase().endsWith('.mp3') || cleanName.toLowerCase().endsWith('.wav')) {
+                cleanName = cleanName.slice(0, -4)
+            }
+            cleanName += ext
         }
 
         return cleanName
@@ -59,7 +65,9 @@ export const downloadManager = {
     findTargetFolder(root: string, maxSongs: number = 20, avoidFolders: string[] = []): string {
         let index = 1
         while (true) {
-            const folderName = `playlist-${index}`
+            const groupNum = Math.ceil(index / 2)
+            const subNum = (index % 2 === 0) ? 2 : 1
+            const folderName = `playlist-${groupNum}.${subNum}`
             const folderPath = join(root, folderName)
 
             // Check if we should avoid this folder
@@ -88,7 +96,7 @@ export const downloadManager = {
      */
     async process(opts: DownloadOptions): Promise<DownloadResult> {
         try {
-            const { url, filename, outputFolder, maxSongsPerPlaylist = 20, avoidFolders = [], flatStructure = false } = opts
+            const { url, filename, outputFolder, maxSongsPerPlaylist = 20, avoidFolders = [], flatStructure = false, isWav = false } = opts
 
             logToFile(`[Process] Request: ${filename}`)
             logToFile(`[Process] CWD: ${process.cwd()}`)
@@ -96,6 +104,7 @@ export const downloadManager = {
             logToFile(`[Process] Out: ${outputFolder}`)
             logToFile(`[Process] Max: ${maxSongsPerPlaylist}`)
             logToFile(`[Process] Flat: ${flatStructure}`)
+            logToFile(`[Process] isWav: ${isWav}`)
 
             // 1. Ensure Output Root Exists
             if (!existsSync(outputFolder)) {
@@ -110,7 +119,7 @@ export const downloadManager = {
             logToFile(`[Process] Target: ${targetFolder}`)
 
             // 3. Prepare File Path
-            const cleanName = this.sanitizeFilename(filename)
+            const cleanName = this.sanitizeFilename(filename, isWav)
             const fullPath = join(targetFolder, cleanName)
 
             // 4. Download
